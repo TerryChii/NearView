@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "test:e2e": "pnpm build && node scripts/e2e-smoke.mjs",
+    "docs:screenshot": "pnpm build && node scripts/capture-docs.mjs",
     "build": "pnpm typecheck && electron-vite build",
     "package": "pnpm build && electron-builder --dir",
     "dist": "pnpm build && electron-builder"

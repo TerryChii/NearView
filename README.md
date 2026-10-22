@@ -1,34 +1,103 @@
-# NearView · 近屏
+<p align="center">
+  <img src="./resources/icon.png" width="104" height="104" alt="NearView logo" />
+</p>
 
-NearView 是一个面向虚拟局域网的点对点屏幕共享桌面应用。它不注册账号、不部署公网中继，也不做房间广播或附近发现。用户先通过 Radmin VPN、ZeroTier、Tailscale 等建立虚拟局域网，再输入房主 IP 加入共享节点。
+<h1 align="center">NearView · 近屏</h1>
 
-项目目前是可运行的 **0.3 MVP**，优先支持 Windows。应用不创建 TUN/TAP 虚拟网卡，而是使用已有虚拟局域网提供的 IP 直连；因此它兼容上述 VPN，但不冒充或接管其私有协议。
+<p align="center">
+  面向虚拟局域网的轻量多人屏幕共享工具。
+</p>
 
-## 已实现
+<p align="center">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.3.0-17634f" />
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20first-315ce7" />
+  <img alt="WebRTC" src="https://img.shields.io/badge/media-WebRTC-27a57a" />
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-ff634d" />
+</p>
 
-- 输入房主虚拟 IP 后探测共享节点，不做 UDP 组播、房间扫描或附近发现。
-- 创建房间时先选择“本地局域网”或“虚拟局域网”，再选择对应实体网卡或 Radmin VPN 等虚拟网卡。
-- 加入前可看到房间名称、在线人数、密码状态和正在共享的画面数量。
-- 默认信令端口为 `42800`；如果端口被占用，创建结果会显示实际端口。
-- 支持 Radmin VPN、ZeroTier、Tailscale、WireGuard 等系统虚拟网卡；未检测到时会提示先安装或启动对应软件。
-- 房主内置 WebSocket 信令服务，无需额外部署。
-- 成员列表显示实时 P2P PING、四格信号强度和自适应画质状态。
-- 有人加入正在共享的房间时，仅共享者收到应用内提示；开始共享不会向旁观者弹通知。
-- 最多 8 人规模的 WebRTC P2P Mesh 屏幕流，支持多人同时共享。
-- 整屏或单窗口捕获，可选系统声音。
-- 多人宫格、单人聚焦、原生画中画与全屏查看。
-- 三档画质：文字优先 1080p、均衡 1600×900、流畅 720p/60fps。
-- 观看端统一目标播放延迟为约 180ms；慢连接自动降低该路码率、分辨率或帧率。
-- 带观看者昵称的点击光圈和拖拽箭头，标注自动消失。
-- 房间聊天、剪贴板文本一键投递、单条消息复制。文字由房主中转，不是端到端消息。
-- 隐私暂停：停止发送实时帧，改为发送冻结画面。
-- 房主密码使用盐化 `scrypt` 摘要校验；媒体由 WebRTC DTLS-SRTP 加密。
+<p align="center">
+  <img src="./docs/screenshots/home.png" alt="NearView 首页界面" width="920" />
+</p>
+
+<p align="center">
+  <sub>界面预览使用演示网卡与演示 IP，不包含真实局域网信息。</sub>
+</p>
+
+> NearView 不提供账号、公共目录或中继服务。先从 Radmin VPN、ZeroTier、Tailscale 等客户端取得虚拟 IP，再通过 IP 建立点对点屏幕共享。
+
+[功能](#功能) · [快速开始](#快速开始) · [使用方式](#使用方式) · [工作原理](#工作原理) · [常见问题](#常见问题) · [安全边界](#安全边界) · [参与开发](#参与开发)
+
+## 为什么选择 NearView
+
+- **不用部署服务器**：房主进程内置信令服务，屏幕流直接在设备之间传输。
+- **不做房间扫描**：没有 UDP 组播和附近发现，只有知道房主 IP 的人才能探测并加入。
+- **两种网络模式**：建立房间时选择本地实体网卡，或选择 Radmin VPN 等已有虚拟网卡。
+- **多人同时共享**：房间内最多按 8 人 P2P Mesh 设计，可以同时观看多路屏幕。
+- **统一观看延迟**：所有观看端使用约 180ms 的目标播放缓冲，慢连接降码率并丢帧追赶。
+- **隐私暂停**：暂停实时画面和音频，只向观看者发送冻结帧。
+- **开源且无持续带宽成本**：项目本身不托管中继，不承担用户通信流量。
+
+## 功能
+
+### 房间与网络
+
+- 本地局域网模式：选择 Ethernet、Wi-Fi 等实体网卡。
+- 虚拟局域网模式：识别 Radmin VPN、ZeroTier、Tailscale、WireGuard、TUN/TAP 等虚拟网卡。
+- 默认信令端口 `42800`，端口冲突时自动选择其他可用端口。
+- 信令服务只监听创建时选择的网卡地址。
+- 输入 IP 后查看房间名称、成员数量、密码状态和正在共享的画面数量。
+- 可选房间密码，房主进程使用盐化 `scrypt` 摘要校验。
+
+### 屏幕共享
+
+- 整个显示器或单个应用窗口。
+- 可选系统声音。
+- 多人同时共享、宫格预览、单人聚焦、全屏和原生画中画。
+- 三档画质：
+  - 文字优先：1080p，清晰度优先；
+  - 均衡：1600×900；
+  - 流畅：720p/60fps。
+- 自适应降级：根据每位观看者的真实 P2P RTT 单独调整码率、分辨率和帧率。
+- 暂停共享时冻结当前帧并停止发送实时音频。
+
+### 协作
+
+- 带观看者昵称的点击光圈和拖拽箭头。
+- 标注自动消失，不夺取共享者的鼠标控制权。
+- 房间聊天和剪贴板文本投递。
+- 单条消息快速复制。
+- 有人加入正在共享的房间时，仅共享者收到应用内提示。
+
+### 状态与诊断
+
+- 每两秒通过 WebRTC DataChannel 测量端到端 P2P PING。
+- 成员列表显示四格信号强度。
+- 显示每位成员的连接和共享状态。
+- 房间页显示当前网络方式和实际使用的网卡名称。
+- 内置双实例端到端冒烟测试，可验证真实屏幕捕获与视频收流。
 
 ## 快速开始
 
-要求 Node.js 22+ 与 pnpm 10+。
+### 直接运行 Windows 版本
+
+从 GitHub Releases 下载：
+
+- `NearView-x.y.z-win-x64.zip`：解压后运行 `NearView.exe`。
+- `NearView Setup x.y.z.exe`：安装版（网络可用时由本地构建生成）。
+
+Windows 首次运行时，请允许应用访问“专用网络”。默认需要放行 TCP `42800`；如果界面显示了其他端口，以实际端口为准。
+
+### 从源码运行
+
+要求：
+
+- Node.js 22+
+- pnpm 10+
+- Windows 10/11（当前主要验证平台）
 
 ```bash
+git clone <your-repository-url>
+cd nearview
 pnpm install
 pnpm dev
 ```
@@ -40,80 +109,151 @@ pnpm build
 pnpm package
 ```
 
-构建产物位于 `out/`，安装包位于 `release/`。
+构建输出：
 
-Windows 首次运行会请求“专用网络”防火墙权限。请允许房主接收 TCP `42800`；如果应用因端口占用切换到其他端口，应按房间界面显示的实际端口放行。
+- Web、主进程和预加载脚本：`out/`
+- Windows 免安装目录：`release/win-unpacked/`
+- 安装包与其他发布产物：`release/`
 
 ## 使用方式
 
-1. 两台设备先接入同一个虚拟局域网。Radmin VPN 用户应确认双方能看到彼此的虚拟 IP。
-2. 一台设备点击“创建共享节点”，先选择网络方式：
-   - **本地局域网**：选择 Ethernet、Wi-Fi 等实体网卡；
-   - **虚拟局域网**：选择已启动的 Radmin VPN、ZeroTier、Tailscale 等虚拟网卡。
-3. 房主会在所选网卡地址上监听默认端口 `42800`，不会监听其他网卡。
-4. 另一台设备点击“输入 IP 加入”，输入房主虚拟 IP。应用会自动读取节点名称、在线人数和当前是否有人在共享。
-5. 确认节点信息并输入密码后加入。如果房主正在共享，房主会收到“某成员加入并观看”的提示，但开始共享本身不会给其他人弹提醒。
-6. 点击“共享我的屏幕”选择整个屏幕或应用窗口。
+### 1. 准备网络
 
-## 架构
+如果双方不在同一本地网络，请先使用 Radmin VPN、ZeroTier 或 Tailscale 建立虚拟局域网，并确认双方能够互相访问虚拟 IP。
 
-```text
-访客 A ── 输入房主 IP ── WebSocket probe / join ──┐
-                                                  │
-                                                  ├── 房主内置信令 :42800
-                                                  │
-访客 B ── 输入房主 IP ── WebSocket probe / join ──┘
-        │
-        ├──────── WebRTC 加密媒体（P2P Mesh）──────── 房主屏幕
-        ├──────── WebRTC 加密媒体（P2P Mesh）──────── 访客 A 屏幕
-        └──────── WebRTC 加密媒体（P2P Mesh）──────── 访客 B 屏幕
+NearView 不创建 TUN/TAP 虚拟网卡，也不提供公网中继。
+
+### 2. 房主创建房间
+
+1. 点击“创建共享节点”。
+2. 选择网络方式：
+   - **本地局域网**：选择实体网卡；
+   - **虚拟局域网**：选择已经启动的 Radmin VPN 等虚拟网卡。
+3. 设置可选密码并进入房间。
+4. 将房间右上角显示的 IP 和实际端口发给好友。
+
+### 3. 访客加入
+
+1. 点击“输入 IP 加入”。
+2. 输入房主 IP。默认端口为 `42800`；如果房主使用其他端口，请输入完整地址。
+3. 应用会显示房间人数和当前共享数量。
+4. 输入密码并加入。
+
+### 4. 开始共享
+
+点击“共享我的屏幕”，选择整个显示器或某个应用窗口。
+
+## 工作原理
+
+```mermaid
+flowchart LR
+    A[访客 A] -->|输入房主 IP<br/>WebSocket probe / join| H[房主信令服务<br/>所选网卡:42800]
+    B[访客 B] -->|输入房主 IP<br/>WebSocket probe / join| H
+
+    A <-->|WebRTC 加密媒体| H
+    B <-->|WebRTC 加密媒体| H
+    A <-->|WebRTC 加密媒体| B
+
+    subgraph LAN[本地局域网或已有虚拟局域网]
+        H
+        A
+        B
+    end
 ```
 
-房主只处理房间探测、SDP、ICE 和房间级文字，不转发屏幕画面。屏幕流直接走 WebRTC host candidate，因此不依赖 STUN/TURN，也不做公网穿透。
+房主只处理房间探测、WebSocket 信令、SDP、ICE 和房间文字，不转发屏幕画面。
 
-当前 Mesh 上限按 8 人设计。每个共享者会向每位观看者单独编码、上传，人数继续增长时应升级为 SFU 拓扑。
+屏幕与系统声音通过 WebRTC DTLS-SRTP 加密，直接在设备之间传输。NearView 不依赖 STUN/TURN，也不做公网穿透，因此双方必须在网络层可达。
 
-NearView 本身不运行公共服务器，也不提供中继。两种房间模式都没有开发者托管的带宽成本；虚拟局域网的可达性由 Radmin VPN、ZeroTier、Tailscale 等外部虚拟网络负责。
+## 延迟一致性
 
-### 延迟一致性
-
-应用通过 DataChannel 每两秒测量一次真实 P2P RTT，并把这些值显示在成员列表中。每个观看端使用统一的目标端到端播放延迟，约 180ms：
+Mesh 中不同观看者的网络延迟可能不同。NearView 不会让一个人的延迟持续增长到数秒，而是每两秒测量真实 P2P RTT，然后调整播放缓冲：
 
 ```text
 播放缓冲 = clamp(180ms - P2P RTT / 2, 40ms, 260ms)
 ```
 
-这样网络更快的一端会使用更大的缓冲，网络更慢的一端使用更小的缓冲，尽量让所有人看到同一时间点。对于 RTT 超过 250ms 或 450ms 的连接，发送端会分别降低该成员的码率、分辨率和帧率；如果仍然追不上缓冲目标，WebRTC 会丢帧追赶，而不是让延迟持续累积。该目标值是近似值，实际表现还受编码器、GPU、丢包和 Wi-Fi 抖动影响。
+- 网络更快的一端使用更大的缓冲。
+- 网络更慢的一端使用更小的缓冲。
+- RTT 超过 250ms 时，该路连接自动降低码率和分辨率。
+- RTT 超过 450ms 时进一步减少码率与帧率。
+- 仍然追不上同步目标时，WebRTC 会丢帧追赶。
 
-## 安全边界
+这是“统一目标缓冲 + 每连接自适应”，不是基于主时钟的帧级严格同步。高丢包、Wi-Fi 抖动和极端跨地域网络仍可能产生偏差。
 
-- WebRTC 媒体使用标准 DTLS-SRTP 加密。
-- 屏幕共享中的系统声音属于媒体流，同样走 WebRTC 加密；应用没有麦克风语音通话功能。
-- 房间密码在房主进程中以盐化摘要形式保存，单次连接后不会回传。
-- 信令 WebSocket 默认是明文 `ws://`，房间密码会发送给房主。NearView 面向你信任的局域网和虚拟专用网络，不应直接暴露在公共 Wi-Fi 或公网端口上。
-- 输入 IP 后的节点探测会返回房间名称、在线人数和共享数量，但不会返回成员名单或屏幕内容。房主可以限制谁知道这个 IP，应用不提供公网目录服务。
-- 房间文字由房主进程接收后广播，房主在技术上可以读取；它不是端到端加密消息。
-- 当前版本没有指纹校验和 TURN 中继，无法抵御局域网内的主动中间人攻击；对高敏感内容请先建立可信的 VPN/局域网。
+## 支持范围
 
-更完整的威胁模型见 [SECURITY.md](SECURITY.md)，使用边界见 [ACCEPTABLE_USE.md](ACCEPTABLE_USE.md)。
+| 项目 | 状态 |
+|---|---|
+| Windows 10/11 | 已完成实机与打包验证 |
+| macOS | Electron 构建配置已提供，屏幕录制授权仍需实测 |
+| Linux | Electron 构建配置已提供，桌面捕获仍需实测 |
+| Radmin VPN 网卡 | 已支持识别和房间绑定；当前开发机网卡处于 Disabled，尚未做真实双机隧道联调 |
+| ZeroTier / Tailscale / WireGuard | 按虚拟网卡名称自动识别，需要用户先启动对应客户端 |
+| 公共房间目录 | 不支持 |
+| 公共中继 / TURN | 不支持 |
+| 内置虚拟局域网创建 | 不支持 |
+| 远程控制 | 不支持 |
+
+## 安全与隐私
+
+- 屏幕和共享系统声音使用 WebRTC DTLS-SRTP。
+- 房间密码以盐化 `scrypt` 摘要保存在房主内存中。
+- 信令监听只绑定创建时选择的网卡地址。
+- Electron 启用 `contextIsolation`、禁用 `nodeIntegration`，渲染进程只暴露白名单 IPC。
+- 房间文字由房主中转，房主技术上可以读取，因此**不是端到端消息**。
+- 信令使用明文 `ws://`，房间密码会发送给房主一次。
+- 节点探测会向知道 IP 的客户端返回房间名称、人数、密码状态和共享数量。
+- 当前没有证书指纹校验，不能抵御主动中间人攻击。
+- 不要在公共 Wi-Fi 或公网端口上直接暴露 NearView。
+
+详细威胁模型：[SECURITY.md](SECURITY.md)
 
 ## 语音、文字与滥用边界
 
-NearView 当前不提供匿名公网语音聊天或公开聊天室。文字消息只存在于私有房间，并由房主中转，便于房主在自己的节点上限制和关闭；应用不保存到本地磁盘，信令进程只在内存保留最近 80 条。
+NearView 当前**不提供麦克风语音聊天**。共享中的系统声音只是屏幕媒体的一部分。
 
-这不意味着应用可以完全阻止滥用。屏幕共享本身可能被用于未经同意的窥视、骚扰、欺诈或窃取信息，因此在公开分发时必须明确接受使用条款、提供举报渠道，并把默认场景限定为受信任的私有网络。NearView 不提供账号、公开目录、录音录制或公网中继，以降低被当作匿名通信平台滥用的风险。
+文字聊天限定在私有房间内，并由房主进程中转。应用不把文字作为端到端安全通信产品宣传，也不提供公开聊天室、账号体系、公共目录或长期聊天记录。
 
-## 已知限制与路线图
+公开分发或运营任何公共节点前，应配置接受使用条款、举报渠道和内容处置流程。详细边界见 [ACCEPTABLE_USE.md](ACCEPTABLE_USE.md)。
 
-- 当前实现以 Windows 为主；Electron 与 WebRTC 跨平台基础已具备，但 macOS 屏幕录制授权和 Linux 桌面捕获仍需实测。
-- 系统声音回环主要依赖 Windows Chromium 实现；其他平台可能需要额外驱动。
-- 当前没有内置虚拟局域网。应用支持并检测已有虚拟网卡，但不负责创建 VPN、分配虚拟 IP 或提供公网中继。
-- 自适应画质通过每条连接独立改编码参数实现，尚未使用真正的 Simulcast 三层码流；同一路屏幕仍由共享者分别上传给每个观看者。
-- 严格同步是“统一缓冲目标 + 慢连接降级”，不是基于统一主时钟的帧级同步。对于极高丢包或跨地域高延迟路径，仍然无法保证所有人完全同帧。
-- 没有账号、云端目录、远程控制或公网穿透；这些都是明确的产品边界。
-- 后续优先级：可选的自建 WireGuard 网络、真实 Simulcast、8 人以上 SFU、连接质量面板、应用签名与自动更新。
+## 已知限制
 
-## 参与开发
+- 必须依赖已有且互通的局域网或虚拟局域网。
+- 没有公共会合服务、TURN 中继或公网穿透。
+- 当前没有内置创建 WireGuard/TUN 虚拟网卡的能力。
+- 多人 Mesh 需要共享者向每位观看者分别上传，8 人以上建议升级为 SFU。
+- 当前按码率和分辨率约束做每连接自适应，尚未实现真正的 Simulcast 三层码流。
+- 安装包签名、自动更新和崩溃上报尚未完成。
+
+## 常见问题
+
+### NearView 会创建 Radmin VPN 那样的虚拟网卡吗？
+
+不会。当前版本检测并使用已经存在的虚拟网卡。用户需要先通过 Radmin VPN、ZeroTier、Tailscale 等客户端加入同一个虚拟网络，再在 NearView 创建房间时选择该网卡。
+
+### 没有云服务器可以跨公网使用吗？
+
+可以，前提是设备已经通过第三方虚拟局域网实现 IP 互通。NearView 不需要自建服务器，也不提供公共中继；如果双方网络层不可达，就无法建立连接。
+
+### 屏幕数据会经过房主的 WebSocket 服务吗？
+
+不会。房主的 WebSocket 服务只交换房间状态、SDP、ICE 和文字消息。屏幕与共享系统声音通过 WebRTC 在设备之间直接传输。
+
+### 为什么输入 IP 后看不到房间？
+
+依次检查：
+
+1. 双方是否处于同一个 Radmin VPN、ZeroTier 或 Tailscale 网络；
+2. 房主选择的网卡地址是否就是双方都能访问的虚拟 IP；
+3. Windows 防火墙是否允许 TCP `42800`，或房间界面显示的其他端口；
+4. 房主是否已经创建房间并且选择“虚拟局域网”模式。
+
+### 文字聊天是端到端加密吗？
+
+不是。文字由房主进程接收并广播，房主技术上可以读取。NearView 不提供麦克风语音聊天，也不承担公共聊天平台的角色。
+
+## 开发与测试
 
 ```bash
 pnpm typecheck
@@ -121,14 +261,83 @@ pnpm test
 pnpm build
 ```
 
-Windows 上还可以运行双实例端到端冒烟测试。它会隐藏启动两个 Electron 客户端，自动验证 IP 探测发现共享、加入提示、成员 PING、统一播放缓冲、真实 WebRTC 收流、房间聊天和隐私暂停，并将截图写到本地 `smoke-room.png`（已加入 `.gitignore`）：
+Windows 双实例端到端测试：
 
 ```bash
 pnpm test:e2e
 ```
 
-欢迎提交 Issue 和 Pull Request。请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+测试会自动完成：
+
+- 创建本地局域网房间；
+- 验证虚拟局域网模式与网卡提示；
+- 仅输入 IP 探测共享节点；
+- 加入后验证共享者提示和成员 PING；
+- 捕获真实屏幕并通过 WebRTC 收流；
+- 验证两端统一 180ms 播放缓冲；
+- 验证文字聊天、隐私暂停和恢复。
+
+测试截图仅在本地生成，已被 `.gitignore` 排除。
+
+重新生成 README 用的安全首页截图：
+
+```bash
+pnpm docs:screenshot
+```
+
+## 项目结构
+
+```text
+src/
+├─ main/                 Electron 主进程、信令服务、网卡检测、屏幕捕获
+├─ preload/              白名单 IPC 桥接
+├─ renderer/             React 界面、WebRTC Mesh、延迟同步
+└─ shared/               共享类型与地址解析
+
+scripts/e2e-smoke.mjs    双实例端到端测试
+tests/                   信令与网络地址单元测试
+resources/               应用图标
+docs/screenshots/        README 安全演示截图
+```
+
+## 参与贡献
+
+欢迎提交 Issue 和 Pull Request。开始前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+提交媒体或网络相关修改时，请在 PR 中说明：
+
+- 测试的操作系统和网络类型；
+- 是否使用 Radmin VPN、ZeroTier、Tailscale 等虚拟网卡；
+- 是否验证多端同时共享；
+- 是否验证直连失败和端口占用场景；
+- 是否影响隐私边界或房间权限。
+
+## 上传到 GitHub
+
+仓库中已经包含 CI 和 Release 工作流。首次上传时：
+
+1. 在 GitHub 创建空仓库，不要勾选自动生成 README。
+2. 将 README 中的 `<your-repository-url>` 替换成自己的仓库地址。
+3. 在本目录执行：
+
+```bash
+git remote add origin https://github.com/<用户名>/<仓库名>.git
+git push -u origin main
+```
+
+4. 发布版本时推送标签：
+
+```bash
+git tag v0.3.0
+git push origin v0.3.0
+```
+
+`.github/workflows/release.yml` 会在 GitHub Actions 中构建 Windows 安装包与便携 ZIP，并创建 GitHub Release。Actions 网络正常时会自动下载 NSIS；若发布任务因外部下载失败，可在本机网络稳定时运行 `pnpm dist` 后手动上传 `release/` 中的产物。
 
 ## License
 
 [MIT](LICENSE)
+
+---
+
+NearView is an open-source, IP-addressed screen sharing desktop app for trusted LAN and virtual-LAN environments. It prioritizes direct peer-to-peer WebRTC media, does not provide public discovery or relay infrastructure, and currently focuses on Windows.

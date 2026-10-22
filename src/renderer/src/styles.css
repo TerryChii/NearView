@@ -176,6 +176,32 @@ textarea:focus-visible {
   gap: 10px;
 }
 
+.topbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.service-chip {
+  display: inline-flex;
+  height: 27px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.58);
+  font-size: 8px;
+  font-weight: 650;
+}
+
+.service-chip.direct {
+  border-color: #c7dfd4;
+  color: var(--green);
+  background: #edf8f3;
+}
+
 .profile-avatar {
   display: grid;
   width: 34px;
@@ -274,6 +300,29 @@ textarea:focus-visible {
   margin-top: 30px;
 }
 
+.hero-assurances {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 17px;
+}
+
+.hero-assurances span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.hero-assurances span::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--green-bright);
+  content: "";
+}
+
 .primary-button,
 .secondary-button,
 .text-button,
@@ -355,6 +404,27 @@ textarea:focus-visible {
   min-height: 180px;
   flex: 1;
   overflow: hidden;
+}
+
+.network-summary {
+  position: absolute;
+  z-index: 3;
+  top: 16px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  color: rgba(255, 255, 255, 0.64);
+  background: rgba(255, 255, 255, 0.055);
+  font-size: 8px;
+  backdrop-filter: blur(5px);
+}
+
+.network-summary.local {
+  left: 17px;
+}
+
+.network-summary.virtual {
+  right: 17px;
 }
 
 .radar-ring {
@@ -1441,7 +1511,23 @@ textarea:focus-visible {
 }
 
 .invite-button {
-  border-color: #343d39;
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid #343d39;
+  border-radius: 8px;
+  color: #a9b6af;
+  background: transparent;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.invite-button:hover {
+  border-color: #4b5c54;
+  color: #eff6f2;
+  background: #252d29;
 }
 
 .leave-button {
@@ -2390,6 +2476,10 @@ textarea:focus-visible {
 }
 
 @media (max-width: 980px) {
+  .service-chip {
+    display: none;
+  }
+
   .hero {
     grid-template-columns: 1fr;
   }

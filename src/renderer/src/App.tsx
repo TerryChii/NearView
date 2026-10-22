@@ -155,17 +155,27 @@ function Home({
             <small>近屏</small>
           </span>
         </div>
-        <div className="profile-field">
-          <span className="profile-avatar">{initials(displayName)}</span>
-          <label>
-            <small>房间内显示为</small>
-            <input
-              value={displayName}
-              maxLength={32}
-              onChange={(event) => setDisplayName(event.target.value)}
-              aria-label="你的昵称"
-            />
-          </label>
+        <div className="topbar-meta">
+          <span className="service-chip">
+            <Icon name="lock" size={13} />
+            无云服务
+          </span>
+          <span className="service-chip direct">
+            <Icon name="signal" size={13} />
+            P2P 直连
+          </span>
+          <div className="profile-field">
+            <span className="profile-avatar">{initials(displayName)}</span>
+            <label>
+              <small>房间内显示为</small>
+              <input
+                value={displayName}
+                maxLength={32}
+                onChange={(event) => setDisplayName(event.target.value)}
+                aria-label="你的昵称"
+              />
+            </label>
+          </div>
         </div>
       </header>
 
@@ -195,6 +205,11 @@ function Home({
                 输入 IP 加入
               </button>
             </div>
+            <div className="hero-assurances">
+              <span>无需账号</span>
+              <span>无公共中继</span>
+              <span>屏幕数据不经过服务器</span>
+            </div>
             {error ? (
               <div className="inline-error">
                 <span>{error}</span>
@@ -207,6 +222,12 @@ function Home({
 
           <div className="network-card">
             <div className="network-visual" aria-hidden="true">
+              <span className="network-summary local">
+                实体网卡 {interfaces.filter((item) => !item.virtual).length}
+              </span>
+              <span className="network-summary virtual">
+                虚拟网卡 {interfaces.filter((item) => item.virtual).length}
+              </span>
               <span className="radar-ring ring-one" />
               <span className="radar-ring ring-two" />
               <span className="radar-ring ring-three" />
@@ -883,12 +904,13 @@ function RoomView({
             同步约 {syncLatencyTargetMs}ms
           </span>
           <button
-            className="icon-button invite-button"
+            className="invite-button"
             type="button"
             title={`复制邀请地址 ${endpoint}`}
             onClick={() => void copyText(endpoint)}
           >
-            <Icon name="link" />
+            <Icon name="link" size={15} />
+            复制 IP
           </button>
           <button className="leave-button" type="button" onClick={onLeave}>
             离开
@@ -1068,7 +1090,7 @@ function RoomView({
                     <Icon name="monitor" size={28} />
                   </span>
                   <strong>房间很安静</strong>
-                  <p>点击右上角共享屏幕，其他人会立刻看到你的画面。</p>
+                  <p>共享后把右上角 IP 发给成员；有人加入时你会收到提示。</p>
                 </div>
               ) : null}
             </section>
