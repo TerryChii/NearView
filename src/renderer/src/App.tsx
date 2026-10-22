@@ -9,6 +9,7 @@ import {
 import type {
   AnnotationPayload,
   ChatMessage,
+  NetworkMode,
   NetworkInterfaceInfo,
   RoomProbeResult
 } from "../../shared/types";
@@ -62,6 +63,10 @@ function qualityLabel(quality: QualityMode): string {
     : quality === "smooth"
       ? "流畅优先"
       : "均衡";
+}
+
+function networkModeLabel(mode: NetworkMode): string {
+  return mode === "virtual" ? "虚拟局域网" : "本地局域网";
 }
 
 function RoomAvatar({ name, sharing }: { name: string; sharing: boolean }) {
@@ -290,7 +295,13 @@ interface ActionDialogProps {
   interfaces: NetworkInterfaceInfo[];
   selectedInterface: string;
   onClose: () => void;
-  onCreate: (roomName: string, password: string) => Promise<void>;
+  onCreate: (request: {
+    roomName: string;
+    password: string;
+    networkMode: NetworkMode;
+    interfaceAddress: string;
+  }) => Promise<void>;
+  onRefreshInterfaces: () => Promise<NetworkInterfaceInfo[]>;
   onProbe: (endpoint: string) => Promise<RoomProbeResult>;
   onJoinManual: (
     endpoint: string,
@@ -306,16 +317,40 @@ function ActionDialog({
   selectedInterface,
   onClose,
   onCreate,
+  onRefreshInterfaces,
   onProbe,
   onJoinManual
 }: ActionDialogProps) {
   const [roomName, setRoomName] = useState(`${displayName} 的共享节点`);
   const [endpoint, setEndpoint] = useState("");
   const [password, setPassword] = useState("");
+  const [networkMode, setNetworkMode] = useState<NetworkMode>(() =>
+    interfaces.find((item) => item.address === selectedInterface)?.virtual
+      ? "virtual"
+      : "local"
+  );
+  const [adapterAddress, setAdapterAddress] = useState(selectedInterface);
   const [busyState, setBusyState] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [probing, setProbing] = useState(false);
   const [probe, setProbe] = useState<RoomProbeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const availableInterfaces = interfaces.filter((item) =>
+    networkMode === "virtual" ? item.virtual : !item.virtual
+  );
+
+  useEffect(() => {
+    if (state.type !== "create") {
+      return;
+    }
+    if (!availableInterfaces.some((item) => item.address === adapterAddress)) {
+      setAdapterAddress(availableInterfaces[0]?.address ?? "");
+    }
+  }, [
+    adapterAddress,
+    availableInterfaces,
+    state.type
+  ]);
 
   useEffect(() => {
     if (state.type !== "manual" || endpoint.trim().length < 5) {
@@ -358,7 +393,19 @@ function ActionDialog({
     setError(null);
     try {
       if (state.type === "create") {
-        await onCreate(roomName, password);
+        if (!adapterAddress) {
+          throw new Error(
+            networkMode === "virtual"
+              ? "没有检测到虚拟网卡，请先启动 Radmin VPN 等软件"
+              : "没有检测到可用的本地网卡"
+          );
+        }
+        await onCreate({
+          roomName,
+          password,
+          networkMode,
+          interfaceAddress: adapterAddress
+        });
       } else {
         const result = probe ?? (await onProbe(endpoint));
         if (result.room.hasPassword && !password) {
@@ -403,6 +450,30 @@ function ActionDialog({
 
         {state.type === "create" ? (
           <>
+            <div className="network-mode-picker" role="group" aria-label="建立房间的网络方式">
+              <button
+                type="button"
+                className={networkMode === "local" ? "active" : ""}
+                onClick={() => setNetworkMode("local")}
+              >
+                <Icon name="wifi" size={17} />
+                <span>
+                  <strong>本地局域网</strong>
+                  <small>选择 Ethernet、Wi-Fi 等实体网卡</small>
+                </span>
+              </button>
+              <button
+                type="button"
+                className={networkMode === "virtual" ? "active" : ""}
+                onClick={() => setNetworkMode("virtual")}
+              >
+                <Icon name="link" size={17} />
+                <span>
+                  <strong>虚拟局域网</strong>
+                  <small>使用 Radmin VPN 等已有虚拟网卡</small>
+                </span>
+              </button>
+            </div>
             <label className="field">
               <span>房间名称</span>
               <input
@@ -425,17 +496,57 @@ function ActionDialog({
                 placeholder="设置房间密码"
               />
             </label>
-            <div className="adapter-summary">
-              <Icon name="wifi" size={17} />
+            <label className="field">
               <span>
-                对外地址
-                <strong>
-                  {interfaces.find((item) => item.address === selectedInterface)?.name ??
-                    "自动选择"}
-                </strong>
+                {networkMode === "virtual" ? "虚拟网卡" : "实体网卡"}
+                <small>共享节点只监听所选地址</small>
               </span>
-              <small>{selectedInterface || "127.0.0.1"}</small>
-            </div>
+              {availableInterfaces.length > 0 ? (
+                <select
+                  value={adapterAddress}
+                  onChange={(event) => setAdapterAddress(event.target.value)}
+                >
+                  {availableInterfaces.map((item) => (
+                    <option key={item.id} value={item.address}>
+                      {item.name} · {item.address}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="adapter-empty">
+                  <span>
+                    {networkMode === "virtual"
+                      ? "未检测到虚拟网卡。请先安装并启动 Radmin VPN、ZeroTier 或 Tailscale。"
+                      : "未检测到实体网卡。请检查网络连接后刷新。"}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={refreshing}
+                    onClick={() => {
+                      setRefreshing(true);
+                      onRefreshInterfaces()
+                        .then(() => setError(null))
+                        .catch((reason: unknown) =>
+                          setError(
+                            reason instanceof Error
+                              ? reason.message
+                              : "刷新网卡失败"
+                          )
+                        )
+                        .finally(() => setRefreshing(false));
+                    }}
+                  >
+                    {refreshing ? "刷新中…" : "刷新网卡"}
+                  </button>
+                </div>
+              )}
+            </label>
+            {networkMode === "virtual" && availableInterfaces.length > 0 ? (
+              <div className="virtual-adapter-note">
+                <Icon name="lock" size={14} />
+                成员必须先加入同一个 Radmin VPN 等虚拟网络，再输入这里的 IP。
+              </div>
+            ) : null}
           </>
         ) : (
           <>
@@ -465,7 +576,8 @@ function ActionDialog({
                 <span className="probe-copy">
                   <strong>{probe.room.name}</strong>
                   <small>
-                    {probe.room.hostName} 创建 · {probe.memberCount} 人在线
+                    {probe.room.hostName} 创建 · {networkModeLabel(probe.room.networkMode)} ·{" "}
+                    {probe.memberCount} 人在线
                   </small>
                 </span>
                 <span
@@ -736,6 +848,9 @@ function RoomView({
                 : room.status === "joining"
                   ? "正在连接"
                   : "连接已断开"}
+            </span>
+            <span className="room-network-mode">
+              {networkModeLabel(room.networkMode)} · {room.adapterName}
             </span>
           </div>
         </div>
@@ -1131,13 +1246,29 @@ export default function App() {
     localStorage.setItem(ADAPTER_KEY, address);
   }
 
-  async function createRoom(roomName: string, password: string) {
+  async function createRoom(request: {
+    roomName: string;
+    password: string;
+    networkMode: NetworkMode;
+    interfaceAddress: string;
+  }) {
+    setSelectedInterface(request.interfaceAddress);
     await roomController.createRoom({
-      roomName,
-      password: password || undefined,
+      roomName: request.roomName,
+      password: request.password || undefined,
       displayName,
-      interfaceAddress: selectedInterface
+      interfaceAddress: request.interfaceAddress,
+      networkMode: request.networkMode
     });
+  }
+
+  async function refreshInterfaces() {
+    const items = await window.nearview.getNetworkInterfaces();
+    setInterfaces(items);
+    if (!selectedInterface && items[0]) {
+      setSelectedInterface(items[0].address);
+    }
+    return items;
   }
 
   async function joinManual(
@@ -1201,6 +1332,7 @@ export default function App() {
             selectedInterface={selectedInterface}
             onClose={() => setDialog(null)}
             onCreate={createRoom}
+            onRefreshInterfaces={refreshInterfaces}
             onProbe={roomController.probeRoom}
             onJoinManual={joinManual}
           />

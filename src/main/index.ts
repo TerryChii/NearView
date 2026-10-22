@@ -171,14 +171,34 @@ function registerIpcHandlers(): void {
           throw new Error("请输入房间名称");
         }
 
+        const networkMode =
+          rawRequest?.networkMode === "virtual" ? "virtual" : "local";
+        const requestedInterface = listNetworkInterfaces().find(
+          (item) => item.address === rawRequest?.interfaceAddress
+        );
+        if (rawRequest?.interfaceAddress && !requestedInterface) {
+          throw new Error("所选网卡已不可用，请刷新后重新选择");
+        }
+        if (networkMode === "virtual" && requestedInterface && !requestedInterface.virtual) {
+          throw new Error("虚拟局域网模式需要选择 Radmin VPN 等虚拟网卡");
+        }
+        if (networkMode === "local" && requestedInterface?.virtual) {
+          throw new Error("本地局域网模式需要选择实体网卡");
+        }
         const interfaceAddress =
-          chooseInterfaceAddress(rawRequest?.interfaceAddress) ?? "127.0.0.1";
+          requestedInterface?.address ??
+          chooseInterfaceAddress(rawRequest?.interfaceAddress) ??
+          "127.0.0.1";
+        const adapterName = requestedInterface?.name ?? "Loopback";
 
         const server = await SignalingServer.start({
           roomName,
           hostName: hostName || "房主",
           password,
-          preferredPort: DEFAULT_SIGNALING_PORT
+          preferredPort: DEFAULT_SIGNALING_PORT,
+          bindAddress: interfaceAddress,
+          networkMode,
+          adapterName
         });
         signalingServer = server;
 
@@ -189,7 +209,9 @@ function registerIpcHandlers(): void {
           hostAddress: interfaceAddress,
           signalingPort: port,
           wsUrl: `ws://${interfaceAddress}:${port}`,
-          interfaceAddress
+          interfaceAddress,
+          networkMode,
+          adapterName
         };
         return createdRoom;
       } catch (error) {

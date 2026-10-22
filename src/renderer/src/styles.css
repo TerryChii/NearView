@@ -864,7 +864,8 @@ textarea:focus-visible {
   font-weight: 500;
 }
 
-.field input {
+.field input,
+.field select {
   width: 100%;
   height: 43px;
   padding: 0 13px;
@@ -874,9 +875,98 @@ textarea:focus-visible {
   font-size: 12px;
 }
 
-.field input:focus {
+.field input:focus,
+.field select:focus {
   border-color: #8eb9a8;
   background: #fff;
+}
+
+.network-mode-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin: 0 28px 16px;
+}
+
+.network-mode-picker button {
+  display: flex;
+  min-height: 78px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  text-align: left;
+  background: #fafbf8;
+}
+
+.network-mode-picker button > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.network-mode-picker button span {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.network-mode-picker strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.network-mode-picker small {
+  color: var(--faint);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.network-mode-picker button.active {
+  border-color: #7caf99;
+  color: var(--green);
+  background: #eef8f3;
+  box-shadow: inset 0 0 0 1px rgba(39, 165, 122, 0.12);
+}
+
+.network-mode-picker button.active strong {
+  color: var(--green-dark);
+}
+
+.adapter-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 53px;
+  padding: 10px 11px;
+  border: 1px dashed #d3b49e;
+  border-radius: 10px;
+  color: #876245;
+  background: #fff9f2;
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.adapter-empty button {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: #704b30;
+  background: #f8e7d8;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.virtual-adapter-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: -3px 28px 15px;
+  color: var(--green);
+  font-size: 9px;
+  line-height: 1.5;
 }
 
 .adapter-summary {
@@ -1284,6 +1374,13 @@ textarea:focus-visible {
 
 .room-status.status-disconnected i {
   color: var(--coral);
+}
+
+.room-network-mode {
+  display: block;
+  margin-top: 2px;
+  color: #59665f;
+  font-size: 8px;
 }
 
 .room-header-actions {

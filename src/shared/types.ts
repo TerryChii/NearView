@@ -7,11 +7,14 @@ export interface NetworkInterfaceInfo {
   recommended: boolean;
 }
 
+export type NetworkMode = "local" | "virtual";
+
 export interface CreateRoomRequest {
   roomName: string;
   hostName: string;
   password?: string;
   interfaceAddress?: string;
+  networkMode: NetworkMode;
 }
 
 export interface CreatedRoom {
@@ -21,6 +24,8 @@ export interface CreatedRoom {
   signalingPort: number;
   wsUrl: string;
   interfaceAddress: string;
+  networkMode: NetworkMode;
+  adapterName: string;
 }
 
 export interface PeerSummary {
@@ -37,6 +42,8 @@ export interface RoomSummary {
   name: string;
   hasPassword: boolean;
   hostName: string;
+  networkMode: NetworkMode;
+  adapterName: string;
 }
 
 export interface RoomProbeResult {

@@ -203,6 +203,22 @@ try {
     "Alice create dialog"
   );
   await alicePage.evaluate(
+    click(".network-mode-picker button:nth-child(2)")
+  );
+  await waitFor(
+    alicePage,
+    `(() => {
+      const picker = document.querySelector(".network-mode-picker");
+      const empty = document.querySelector(".adapter-empty");
+      const select = document.querySelector(".action-modal .field select");
+      return Boolean(picker && (empty || select));
+    })()`,
+    "Virtual-adapter mode state"
+  );
+  await alicePage.evaluate(
+    click(".network-mode-picker button:nth-child(1)")
+  );
+  await alicePage.evaluate(
     setInput(".action-modal .field input", "P2P Smoke Room")
   );
   await alicePage.evaluate(
@@ -212,6 +228,11 @@ try {
     alicePage,
     "location.href && Boolean(document.querySelector('.room-page'))",
     "Alice room"
+  );
+  await waitFor(
+    alicePage,
+    "document.querySelector('.room-network-mode')?.textContent.includes('本地局域网')",
+    "Local network mode label"
   );
 
   const endpoint = await alicePage.evaluate(`(() => {
@@ -392,6 +413,7 @@ try {
         endpoint,
         joinAddress,
         members: 2,
+        networkModes: true,
         sharingDiscovery: true,
         sharerNotice: true,
         pingMetric: true,

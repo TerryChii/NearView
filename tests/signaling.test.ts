@@ -46,7 +46,9 @@ describe("SignalingServer", () => {
     const server = await SignalingServer.start({
       roomName: "Pair room",
       hostName: "Host",
-      password: "correct horse"
+      password: "correct horse",
+      networkMode: "local",
+      adapterName: "Ethernet"
     });
     cleanup.push(() => server.close());
 

@@ -3,6 +3,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import type {
   ChatMessage,
   IncomingAnnotation,
+  NetworkMode,
   PeerSummary,
   RoomProbeResult,
   RoomSummary
@@ -23,6 +24,9 @@ interface SignalingOptions {
   hostName: string;
   password?: string;
   preferredPort?: number;
+  bindAddress?: string;
+  networkMode: NetworkMode;
+  adapterName: string;
   onMemberCountChanged?: (count: number) => void;
 }
 
@@ -110,7 +114,9 @@ export class SignalingServer {
       id: this.roomId,
       name: options.roomName,
       hasPassword: Boolean(options.password),
-      hostName: options.hostName
+      hostName: options.hostName,
+      networkMode: options.networkMode,
+      adapterName: options.adapterName
     };
     this.passwordHash = options.password
       ? scryptSync(options.password, this.passwordSalt, 32)
@@ -131,7 +137,7 @@ export class SignalingServer {
   static async start(options: SignalingOptions): Promise<SignalingServer> {
     const listen = async (port: number): Promise<WebSocketServer> => {
       const server = new WebSocketServer({
-        host: "0.0.0.0",
+        host: options.bindAddress ?? "0.0.0.0",
         port,
         maxPayload: MAX_MESSAGE_BYTES
       });

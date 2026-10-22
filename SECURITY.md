@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-NearView 0.2.x receives security fixes on a best-effort basis.
+NearView 0.3.x receives security fixes on a best-effort basis.
 
 ## Threat model
 
@@ -15,6 +15,7 @@ Protected:
 - Voice calling is not implemented; system audio exists only as part of an explicitly started screen share.
 - A password-protected room rejects clients that do not know the password.
 - Room passwords are persisted in memory as salted `scrypt` hashes on the host.
+- The room signaling listener binds only to the network interface selected at creation.
 - IPC exposure from Electron to the renderer is limited to a typed allowlist.
 - Node integration is disabled and context isolation is enabled.
 

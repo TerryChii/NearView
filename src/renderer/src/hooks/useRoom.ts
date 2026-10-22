@@ -3,6 +3,7 @@ import type {
   AnnotationPayload,
   ChatMessage,
   IncomingAnnotation,
+  NetworkMode,
   PeerSummary,
   RoomProbeResult
 } from "../../../shared/types";
@@ -34,6 +35,8 @@ export interface ActiveRoom {
   name: string;
   hostName: string;
   hasPassword: boolean;
+  networkMode: NetworkMode;
+  adapterName: string;
   selfId: string;
   isHost: boolean;
   selfName: string;
@@ -50,6 +53,8 @@ interface JoinOptions {
   roomName?: string;
   hostName?: string;
   hasPassword?: boolean;
+  networkMode?: NetworkMode;
+  adapterName?: string;
 }
 
 interface PeerRuntime {
@@ -77,6 +82,8 @@ interface ServerRoomState {
     name: string;
     hostName: string;
     hasPassword: boolean;
+    networkMode: NetworkMode;
+    adapterName: string;
   };
   peers: PeerSummary[];
 }
@@ -693,6 +700,8 @@ export function useRoom() {
             name: state.room.name,
             hostName: state.room.hostName,
             hasPassword: state.room.hasPassword,
+            networkMode: state.room.networkMode,
+            adapterName: state.room.adapterName,
             selfId: state.selfId,
             status: "connected"
           };
@@ -894,6 +903,8 @@ export function useRoom() {
         name: options.roomName ?? "局域网房间",
         hostName: options.hostName ?? "房主",
         hasPassword: options.hasPassword ?? Boolean(options.password),
+        networkMode: options.networkMode ?? "local",
+        adapterName: options.adapterName ?? "Ethernet",
         selfId: peerIdRef.current,
         isHost: options.isHost,
         selfName: options.displayName,
@@ -969,12 +980,14 @@ export function useRoom() {
       password?: string;
       displayName: string;
       interfaceAddress?: string;
+      networkMode: NetworkMode;
     }) => {
       const created = await window.nearview.createRoom({
         roomName: request.roomName,
         password: request.password,
         hostName: request.displayName,
-        interfaceAddress: request.interfaceAddress
+        interfaceAddress: request.interfaceAddress,
+        networkMode: request.networkMode
       });
       try {
         await connect({
@@ -985,7 +998,9 @@ export function useRoom() {
           isHost: true,
           roomName: created.name,
           hostName: request.displayName,
-          hasPassword: Boolean(request.password)
+          hasPassword: Boolean(request.password),
+          networkMode: created.networkMode,
+          adapterName: created.adapterName
         }, false);
         return created;
       } catch (reason) {
@@ -1070,7 +1085,9 @@ export function useRoom() {
         isHost: false,
         roomName: probe?.room.name,
         hostName: probe?.room.hostName,
-        hasPassword: probe?.room.hasPassword
+        hasPassword: probe?.room.hasPassword,
+        networkMode: probe?.room.networkMode,
+        adapterName: probe?.room.adapterName
       });
     },
     [connect]
