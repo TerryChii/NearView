@@ -11,7 +11,6 @@ import {
   session,
   shell
 } from "electron";
-import { DiscoveryService } from "./network/discovery";
 import {
   chooseInterfaceAddress,
   listNetworkInterfaces
@@ -20,9 +19,9 @@ import { SignalingServer } from "./network/signaling";
 import type {
   CaptureSource,
   CreateRoomRequest,
-  CreatedRoom,
-  RoomAnnouncement
+  CreatedRoom
 } from "../shared/types";
+import { DEFAULT_SIGNALING_PORT } from "../shared/endpoint";
 
 app.commandLine.appendSwitch("disable-features", "WebRtcHideLocalIpsWithMdns");
 
@@ -32,12 +31,6 @@ let createdRoom: CreatedRoom | null = null;
 let selectedCaptureSourceId: string | null = null;
 let roomCreationInFlight = false;
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
-
-const discovery = new DiscoveryService((rooms) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send("discovery:rooms", rooms);
-  }
-});
 
 function createMainWindow(): void {
   const capturePath = process.env.NEARVIEW_CAPTURE_PATH;
@@ -140,25 +133,7 @@ function createMainWindow(): void {
   }
 }
 
-function buildAnnouncement(
-  room: CreatedRoom,
-  request: CreateRoomRequest
-): RoomAnnouncement {
-  return {
-    id: room.id,
-    name: room.name,
-    hostName: request.hostName.trim().slice(0, 32) || "房主",
-    hostAddress: room.hostAddress,
-    signalingPort: room.signalingPort,
-    hasPassword: Boolean(request.password),
-    memberCount: signalingServer?.memberCount ?? 0,
-    createdAt: Date.now(),
-    lastSeen: Date.now()
-  };
-}
-
 async function closeCurrentRoom(): Promise<void> {
-  discovery.setAnnouncement(null);
   const server = signalingServer;
   signalingServer = null;
   createdRoom = null;
@@ -169,15 +144,6 @@ async function closeCurrentRoom(): Promise<void> {
 
 function registerIpcHandlers(): void {
   ipcMain.handle("network:interfaces", () => listNetworkInterfaces());
-
-  ipcMain.handle("discovery:start", async (_event, address?: string) => {
-    const selected = chooseInterfaceAddress(
-      typeof address === "string" ? address : undefined
-    );
-    return discovery.start(selected);
-  });
-
-  ipcMain.handle("discovery:stop", () => discovery.stop());
 
   ipcMain.handle(
     "room:create",
@@ -212,9 +178,7 @@ function registerIpcHandlers(): void {
           roomName,
           hostName: hostName || "房主",
           password,
-          onMemberCountChanged: (count) => {
-            discovery.updateMemberCount(count);
-          }
+          preferredPort: DEFAULT_SIGNALING_PORT
         });
         signalingServer = server;
 
@@ -227,14 +191,6 @@ function registerIpcHandlers(): void {
           wsUrl: `ws://${interfaceAddress}:${port}`,
           interfaceAddress
         };
-        discovery.setAnnouncement(
-          buildAnnouncement(createdRoom, {
-            roomName,
-            hostName: hostName || "房主",
-            password,
-            interfaceAddress
-          })
-        );
         return createdRoom;
       } catch (error) {
         await closeCurrentRoom();
@@ -318,13 +274,6 @@ app.whenReady().then(async () => {
 
   createMainWindow();
 
-  try {
-    const interfaces = listNetworkInterfaces();
-    await discovery.start(interfaces[0]?.address);
-  } catch (error) {
-    console.warn("[discovery] initial start failed:", error);
-  }
-
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
@@ -343,7 +292,6 @@ app.on("before-quit", () => {
     void signalingServer.close();
     signalingServer = null;
   }
-  void discovery.stop(false);
 });
 
 process.on("uncaughtException", (error) => {

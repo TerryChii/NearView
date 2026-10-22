@@ -1,7 +1,7 @@
 {
   "name": "nearview",
-  "version": "0.1.0",
-  "description": "A lightweight, peer-to-peer LAN screen sharing desktop app.",
+  "version": "0.2.0",
+  "description": "A private IP-addressed screen sharing app for virtual LANs.",
   "main": "./out/main/index.js",
   "author": "NearView contributors",
   "license": "MIT",

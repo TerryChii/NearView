@@ -70,6 +70,25 @@ describe("SignalingServer", () => {
       code: "bad_password"
     });
 
+    const prober = await openSocket(url);
+    cleanup.push(() => prober.terminate());
+    const probeResult = nextMessage(
+      prober,
+      (message) => message.type === "room-probe"
+    );
+    prober.send(JSON.stringify({ type: "probe" }));
+    await expect(probeResult).resolves.toMatchObject({
+      result: {
+        room: {
+          name: "Pair room",
+          hasPassword: true
+        },
+        memberCount: 0,
+        sharingCount: 0
+      }
+    });
+    prober.close();
+
     const host = await openSocket(url);
     cleanup.push(() => host.terminate());
     host.send(
@@ -115,6 +134,53 @@ describe("SignalingServer", () => {
     await expect(guestState).resolves.toMatchObject({
       selfId: "guest-peer",
       room: { name: "Pair room" }
+    });
+
+    const sharingState = nextMessage(
+      host,
+      (message) =>
+        message.type === "room-state" &&
+        Array.isArray(message.peers) &&
+        message.peers.some(
+          (peer) =>
+            typeof peer === "object" &&
+            peer !== null &&
+            "id" in peer &&
+            peer.id === "guest-peer" &&
+            "sharing" in peer &&
+            peer.sharing === true
+        )
+    );
+    guest.send(
+      JSON.stringify({
+        type: "status",
+        sharing: true,
+        paused: false,
+        quality: "balanced"
+      })
+    );
+    await sharingState;
+
+    const viewer = await openSocket(url);
+    cleanup.push(() => viewer.terminate());
+    const sharerNotification = nextMessage(
+      guest,
+      (message) => message.type === "viewer-joined"
+    );
+    viewer.send(
+      JSON.stringify({
+        type: "join",
+        roomId: server.roomId,
+        password: "correct horse",
+        peerId: "viewer-peer",
+        name: "Carol"
+      })
+    );
+    await expect(sharerNotification).resolves.toMatchObject({
+      viewer: {
+        id: "viewer-peer",
+        name: "Carol"
+      }
     });
 
     const hostChat = nextMessage(

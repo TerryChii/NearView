@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ComponentProps,
@@ -11,13 +10,14 @@ import type {
   AnnotationPayload,
   ChatMessage,
   NetworkInterfaceInfo,
-  RoomAnnouncement
+  RoomProbeResult
 } from "../../shared/types";
 import { CapturePicker } from "./components/CapturePicker";
 import { Icon } from "./components/Icon";
 import { AnnotatedVideo } from "./components/MediaView";
 import {
   useRoom,
+  type PeerConnectionMetrics,
   type QualityMode,
   type RoomViewPeer
 } from "./hooks/useRoom";
@@ -25,7 +25,6 @@ import {
 type DialogState =
   | { type: "create" }
   | { type: "manual" }
-  | { type: "join"; room: RoomAnnouncement }
   | null;
 
 type AnnotationTool = "off" | "pulse" | "arrow";
@@ -74,17 +73,50 @@ function RoomAvatar({ name, sharing }: { name: string; sharing: boolean }) {
   );
 }
 
+function SignalStrength({
+  metrics,
+  isSelf = false
+}: {
+  metrics?: PeerConnectionMetrics;
+  isSelf?: boolean;
+}) {
+  if (isSelf) {
+    return <span className="signal-self">本机</span>;
+  }
+  const level =
+    metrics?.signal === "excellent"
+      ? 4
+      : metrics?.signal === "good"
+        ? 3
+        : metrics?.signal === "fair"
+          ? 2
+          : metrics?.signal === "poor"
+            ? 1
+            : 0;
+  return (
+    <span className={`signal-meter signal-${metrics?.signal ?? "unknown"}`}>
+      <span className="signal-bars" aria-hidden="true">
+        {[1, 2, 3, 4].map((bar) => (
+          <i key={bar} className={bar <= level ? "active" : ""} />
+        ))}
+      </span>
+      <small>
+        {metrics?.pingMs === null || metrics?.pingMs === undefined
+          ? "--"
+          : `${metrics.pingMs}ms`}
+      </small>
+    </span>
+  );
+}
+
 interface HomeProps {
   displayName: string;
   setDisplayName: (name: string) => void;
   interfaces: NetworkInterfaceInfo[];
   selectedInterface: string;
   setSelectedInterface: (address: string) => void;
-  rooms: RoomAnnouncement[];
-  busy: boolean;
   onCreate: () => void;
   onManualJoin: () => void;
-  onJoinRoom: (room: RoomAnnouncement) => void;
   error: string | null;
   clearError: () => void;
 }
@@ -95,11 +127,8 @@ function Home({
   interfaces,
   selectedInterface,
   setSelectedInterface,
-  rooms,
-  busy,
   onCreate,
   onManualJoin,
-  onJoinRoom,
   error,
   clearError
 }: HomeProps) {
@@ -140,25 +169,25 @@ function Home({
           <div className="hero-copy">
             <span className="eyebrow">
               <i className="live-dot" />
-              同一局域网，自动发现
+              虚拟局域网 IP 直连
             </span>
             <h1>
-              打开，
+              输入 IP，
               <br />
-              就看到彼此。
+              进入共享。
             </h1>
             <p>
-              不注册、不绕公网。在宿舍、办公室或 Radmin VPN
-              虚拟局域网里，一键共享屏幕，把注意力放在同一块画面上。
+              先接入 Radmin VPN、ZeroTier 或 Tailscale，再通过房主的虚拟 IP
+              创建或加入共享节点。没有附近房间广播，也不主动弹出共享提醒。
             </p>
             <div className="hero-actions">
               <button type="button" className="primary-button" onClick={onCreate}>
                 <Icon name="plus" size={18} />
-                创建房间
+                创建共享节点
               </button>
               <button type="button" className="secondary-button" onClick={onManualJoin}>
                 <Icon name="link" size={18} />
-                地址加入
+                输入 IP 加入
               </button>
             </div>
             {error ? (
@@ -203,78 +232,52 @@ function Home({
               <div className="network-meta">
                 <span>
                   <i className={currentInterface ? "online" : ""} />
-                  {currentInterface ? "正在监听局域网" : "等待网络"}
+                  {currentInterface ? "本机虚拟/局域网地址" : "等待网络"}
                 </span>
-                <span>{rooms.length} 个可见房间</span>
+                <span>默认端口 42800</span>
               </div>
             </div>
           </div>
         </section>
 
-        <section className="discovery-section">
+        <section className="access-section access-guide">
           <div className="section-heading">
             <div>
-              <span className="eyebrow">附近</span>
-              <h2>可加入的房间</h2>
+              <span className="eyebrow">连接方式</span>
+              <h2>三步进入同一个共享节点</h2>
             </div>
-            <span className="auto-refresh">
-              <i />
-              自动刷新
+            <span className="manual-only-badge">
+              <Icon name="lock" size={13} />
+              仅手动 IP 连接
             </span>
           </div>
 
-          {busy ? (
-            <div className="room-list">
-              <div className="room-skeleton" />
-              <div className="room-skeleton" />
-            </div>
-          ) : rooms.length > 0 ? (
-            <div className="room-list">
-              {rooms.map((room) => (
-                <button
-                  type="button"
-                  className="room-card"
-                  key={room.id}
-                  onClick={() => onJoinRoom(room)}
-                >
-                  <span className="room-icon">
-                    <Icon name="monitor" size={22} />
-                  </span>
-                  <span className="room-copy">
-                    <strong>{room.name}</strong>
-                    <small>
-                      {room.hostName} · {room.hostAddress}
-                    </small>
-                  </span>
-                  <span className="room-meta">
-                    {room.hasPassword ? <Icon name="lock" size={14} /> : null}
-                    <span>{room.memberCount} 人</span>
-                  </span>
-                  <span className="room-enter">
-                    <Icon name="arrow" size={18} />
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="empty-rooms">
-              <span className="empty-illustration">
-                <span />
-                <span />
-                <span />
-              </span>
-              <div>
-                <strong>还没有发现房间</strong>
-                <p>请让好友在同一网卡上创建房间。若组播被防火墙拦截，可使用“地址加入”。</p>
-              </div>
-            </div>
-          )}
+          <div className="access-steps">
+            <article>
+              <span>01</span>
+              <Icon name="wifi" size={21} />
+              <strong>进入同一个虚拟网络</strong>
+              <p>先通过 Radmin VPN、ZeroTier 或 Tailscale 取得对方的虚拟 IP。</p>
+            </article>
+            <article>
+              <span>02</span>
+              <Icon name="monitor" size={21} />
+              <strong>房主创建节点</strong>
+              <p>选择虚拟网卡并创建共享节点，应用会显示可分享的 IP 地址。</p>
+            </article>
+            <article>
+              <span>03</span>
+              <Icon name="link" size={21} />
+              <strong>输入 IP 查看并加入</strong>
+              <p>先看到成员数量和是否有人共享；不会自动弹提醒，也不做房间扫描。</p>
+            </article>
+          </div>
         </section>
 
         <footer className="home-footer">
-          <span>画面只在设备之间传输</span>
+          <span>屏幕画面只在设备之间传输</span>
           <span>WebRTC 加密</span>
-          <span>兼容 Radmin VPN / ZeroTier / Tailscale</span>
+          <span>无房间广播 · 无自动发现</span>
         </footer>
       </main>
     </div>
@@ -288,8 +291,12 @@ interface ActionDialogProps {
   selectedInterface: string;
   onClose: () => void;
   onCreate: (roomName: string, password: string) => Promise<void>;
-  onJoinDiscovered: (room: RoomAnnouncement, password: string) => Promise<void>;
-  onJoinManual: (endpoint: string, password: string) => Promise<void>;
+  onProbe: (endpoint: string) => Promise<RoomProbeResult>;
+  onJoinManual: (
+    endpoint: string,
+    password: string,
+    probe: RoomProbeResult
+  ) => Promise<void>;
 }
 
 function ActionDialog({
@@ -299,14 +306,51 @@ function ActionDialog({
   selectedInterface,
   onClose,
   onCreate,
-  onJoinDiscovered,
+  onProbe,
   onJoinManual
 }: ActionDialogProps) {
-  const [roomName, setRoomName] = useState(`${displayName} 的房间`);
+  const [roomName, setRoomName] = useState(`${displayName} 的共享节点`);
   const [endpoint, setEndpoint] = useState("");
   const [password, setPassword] = useState("");
   const [busyState, setBusyState] = useState(false);
+  const [probing, setProbing] = useState(false);
+  const [probe, setProbe] = useState<RoomProbeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (state.type !== "manual" || endpoint.trim().length < 5) {
+      setProbe(null);
+      return;
+    }
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setProbing(true);
+      onProbe(endpoint)
+        .then((result) => {
+          if (active) {
+            setProbe(result);
+            setError(null);
+          }
+        })
+        .catch((reason: unknown) => {
+          if (active) {
+            setProbe(null);
+            setError(
+              reason instanceof Error ? reason.message : "无法读取节点信息"
+            );
+          }
+        })
+        .finally(() => {
+          if (active) {
+            setProbing(false);
+          }
+        });
+    }, 550);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [endpoint, onProbe, state.type]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -315,10 +359,12 @@ function ActionDialog({
     try {
       if (state.type === "create") {
         await onCreate(roomName, password);
-      } else if (state.type === "manual") {
-        await onJoinManual(endpoint, password);
       } else {
-        await onJoinDiscovered(state.room, password);
+        const result = probe ?? (await onProbe(endpoint));
+        if (result.room.hasPassword && !password) {
+          throw new Error("请输入房间密码");
+        }
+        await onJoinManual(endpoint, password, result);
       }
       onClose();
     } catch (reason) {
@@ -330,16 +376,12 @@ function ActionDialog({
 
   const title =
     state.type === "create"
-      ? "创建局域网房间"
-      : state.type === "manual"
-        ? "通过地址加入"
-        : state.room.name;
+      ? "创建共享节点"
+      : "输入 IP 加入";
   const subtitle =
     state.type === "create"
-      ? "另一台设备会在大约 2 秒内看到这个房间。"
-      : state.type === "manual"
-        ? "输入房主界面里显示的 IP 和信令端口。"
-        : `${state.room.hostName} 正在等待你加入。`;
+      ? "房主会监听默认端口 42800；端口被占用时，以创建后的实际地址为准。"
+      : "输入房主的虚拟局域网 IP，应用会读取房间人数和共享状态。";
 
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
@@ -373,7 +415,7 @@ function ActionDialog({
             </label>
             <label className="field">
               <span>
-                可选密码 <small>留空则附近的人可直接加入</small>
+                可选密码 <small>只有知道虚拟 IP 的人才能连接</small>
               </span>
               <input
                 type="password"
@@ -386,7 +428,7 @@ function ActionDialog({
             <div className="adapter-summary">
               <Icon name="wifi" size={17} />
               <span>
-                使用网卡
+                对外地址
                 <strong>
                   {interfaces.find((item) => item.address === selectedInterface)?.name ??
                     "自动选择"}
@@ -395,21 +437,52 @@ function ActionDialog({
               <small>{selectedInterface || "127.0.0.1"}</small>
             </div>
           </>
-        ) : state.type === "manual" ? (
+        ) : (
           <>
             <label className="field">
-              <span>房主地址</span>
+              <span>
+                房主虚拟 IP
+                <small>不填端口时使用 42800</small>
+              </span>
               <input
                 autoFocus
                 value={endpoint}
                 onChange={(event) => setEndpoint(event.target.value)}
-                placeholder="26.12.3.4:41000"
+                placeholder="26.12.3.4"
                 spellCheck={false}
               />
             </label>
+            {probing ? (
+              <div className="probe-loading">
+                <i />
+                正在读取节点状态…
+              </div>
+            ) : probe ? (
+              <div className="probe-card">
+                <span className="room-icon">
+                  <Icon name="monitor" size={22} />
+                </span>
+                <span className="probe-copy">
+                  <strong>{probe.room.name}</strong>
+                  <small>
+                    {probe.room.hostName} 创建 · {probe.memberCount} 人在线
+                  </small>
+                </span>
+                <span
+                  className={`share-discovery ${
+                    probe.sharingCount > 0 ? "active" : ""
+                  }`}
+                >
+                  <i />
+                  {probe.sharingCount > 0
+                    ? `${probe.sharingCount} 路屏幕正在共享`
+                    : "当前无人共享"}
+                </span>
+              </div>
+            ) : null}
             <label className="field">
               <span>
-                房间密码 <small>没有密码可留空</small>
+                房间密码 <small>{probe?.room.hasPassword ? "此节点需要密码" : "没有密码可留空"}</small>
               </span>
               <input
                 type="password"
@@ -420,45 +493,34 @@ function ActionDialog({
               />
             </label>
           </>
-        ) : (
-          <>
-            <div className="join-room-summary">
-              <span className="room-icon">
-                <Icon name="monitor" size={22} />
-              </span>
-              <span>
-                <strong>{state.room.name}</strong>
-                <small>
-                  {state.room.hostAddress}:{state.room.signalingPort} ·{" "}
-                  {state.room.memberCount} 人
-                </small>
-              </span>
-              {state.room.hasPassword ? (
-                <span className="security-pill">
-                  <Icon name="lock" size={13} />
-                  私密
-                </span>
-              ) : null}
-            </div>
-            {state.room.hasPassword ? (
-              <label className="field">
-                <span>房间密码</span>
-                <input
-                  autoFocus
-                  type="password"
-                  value={password}
-                  maxLength={64}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="输入房主提供的密码"
-                />
-              </label>
-            ) : null}
-          </>
         )}
 
         {error ? <p className="form-error">{error}</p> : null}
 
         <div className="modal-actions">
+          {state.type === "manual" ? (
+            <button
+              type="button"
+              className="text-button probe-button"
+              disabled={probing || !endpoint.trim()}
+              onClick={() => {
+                setProbing(true);
+                onProbe(endpoint)
+                  .then((result) => {
+                    setProbe(result);
+                    setError(null);
+                  })
+                  .catch((reason: unknown) =>
+                    setError(
+                      reason instanceof Error ? reason.message : "无法读取节点信息"
+                    )
+                  )
+                  .finally(() => setProbing(false));
+              }}
+            >
+              {probing ? "检查中…" : "重新检查"}
+            </button>
+          ) : null}
           <button type="button" className="text-button" onClick={onClose}>
             取消
           </button>
@@ -467,7 +529,7 @@ function ActionDialog({
               ? "正在连接…"
               : state.type === "create"
                 ? "创建并进入"
-                : "加入房间"}
+                : "加入节点"}
             {!busyState ? <Icon name="arrow" size={17} /> : null}
           </button>
         </div>
@@ -550,6 +612,7 @@ interface RoomChromeProps {
   messages: ChatMessage[];
   localStream: MediaStream | null;
   quality: QualityMode;
+  syncLatencyTargetMs: number;
   paused: boolean;
   annotations: ComponentProps<typeof AnnotatedVideo>["annotations"];
   annotationTool: AnnotationTool;
@@ -576,6 +639,7 @@ function RoomView({
   messages,
   localStream,
   quality,
+  syncLatencyTargetMs,
   paused,
   annotations,
   annotationTool,
@@ -696,6 +760,13 @@ function RoomView({
               </button>
             ))}
           </div>
+          <span
+            className="latency-pill"
+            title="所有观看端使用统一的目标播放延迟；慢连接会自动降码率或丢帧追赶"
+          >
+            <Icon name="signal" size={13} />
+            同步约 {syncLatencyTargetMs}ms
+          </span>
           <button
             className="icon-button invite-button"
             type="button"
@@ -908,10 +979,13 @@ function RoomView({
                 />
                 <span className="member-copy">
                   <strong>{room.isHost ? room.hostName : selfName}</strong>
-                  <small>{room.isHost ? "房主" : "你"}</small>
+                  <small>
+                    {room.isHost ? "房主" : "你"}
+                    {localStream ? (paused ? " · 已暂停" : " · 共享中") : " · 在线"}
+                  </small>
                 </span>
                 <span className="member-state">
-                  {localStream ? (paused ? "已暂停" : "共享中") : "在线"}
+                  <SignalStrength isSelf />
                 </span>
               </div>
               {peers.map((peer) => (
@@ -922,7 +996,7 @@ function RoomView({
                     <small>{peer.connectionState === "connected" ? "已连接" : "连接中"}</small>
                   </span>
                   <span className={`member-state ${peer.sharing ? "sharing" : ""}`}>
-                    {peer.sharing ? (peer.paused ? "已暂停" : "共享中") : "在线"}
+                    <SignalStrength metrics={peer.metrics} />
                   </span>
                 </div>
               ))}
@@ -932,6 +1006,7 @@ function RoomView({
           <section className="chat-panel">
             <div className="sidebar-heading chat-heading">
               <span>房间消息</span>
+              <span className="relay-badge">房主中转 · 非端到端</span>
               <button
                 type="button"
                 className="clipboard-button"
@@ -1013,10 +1088,8 @@ export default function App() {
   const [selectedInterface, setSelectedInterfaceState] = useState(
     () => localStorage.getItem(ADAPTER_KEY) ?? ""
   );
-  const [discoveredRooms, setDiscoveredRooms] = useState<RoomAnnouncement[]>([]);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [captureOpen, setCaptureOpen] = useState(false);
-  const [homeBusy, setHomeBusy] = useState(false);
   const [focusedPeerId, setFocusedPeerId] = useState<string | null>(null);
   const [annotationTool, setAnnotationTool] = useState<AnnotationTool>("off");
   const roomController = useRoom();
@@ -1048,29 +1121,6 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    return window.nearview.onDiscoveredRooms(setDiscoveredRooms);
-  }, []);
-
-  useEffect(() => {
-    if (!selectedInterface) {
-      return;
-    }
-    window.nearview
-      .startDiscovery(selectedInterface)
-      .then(setDiscoveredRooms)
-      .catch((reason: unknown) =>
-        roomController.setError(
-          reason instanceof Error ? reason.message : "启动局域网发现失败"
-        )
-      );
-  }, [selectedInterface]);
-
-  const sortedRooms = useMemo(
-    () => [...discoveredRooms].sort((a, b) => b.memberCount - a.memberCount),
-    [discoveredRooms]
-  );
-
   function setDisplayName(name: string) {
     setDisplayNameState(name);
     localStorage.setItem(USER_NAME_KEY, name);
@@ -1082,43 +1132,25 @@ export default function App() {
   }
 
   async function createRoom(roomName: string, password: string) {
-    setHomeBusy(true);
-    try {
-      await roomController.createRoom({
-        roomName,
-        password: password || undefined,
-        displayName,
-        interfaceAddress: selectedInterface
-      });
-    } finally {
-      setHomeBusy(false);
-    }
+    await roomController.createRoom({
+      roomName,
+      password: password || undefined,
+      displayName,
+      interfaceAddress: selectedInterface
+    });
   }
 
-  async function joinDiscovered(roomItem: RoomAnnouncement, password: string) {
-    setHomeBusy(true);
-    try {
-      await roomController.joinDiscoveredRoom(
-        roomItem,
-        password || undefined,
-        displayName
-      );
-    } finally {
-      setHomeBusy(false);
-    }
-  }
-
-  async function joinManual(endpoint: string, password: string) {
-    setHomeBusy(true);
-    try {
-      await roomController.joinManualRoom(
-        endpoint,
-        password || undefined,
-        displayName
-      );
-    } finally {
-      setHomeBusy(false);
-    }
+  async function joinManual(
+    endpoint: string,
+    password: string,
+    probe: RoomProbeResult
+  ) {
+    await roomController.joinManualRoom(
+      endpoint,
+      password || undefined,
+      displayName,
+      probe
+    );
   }
 
   async function leaveRoom() {
@@ -1156,11 +1188,8 @@ export default function App() {
           interfaces={interfaces}
           selectedInterface={selectedInterface}
           setSelectedInterface={setSelectedInterface}
-          rooms={sortedRooms}
-          busy={homeBusy}
           onCreate={() => setDialog({ type: "create" })}
           onManualJoin={() => setDialog({ type: "manual" })}
-          onJoinRoom={(roomItem) => setDialog({ type: "join", room: roomItem })}
           error={roomController.error}
           clearError={() => roomController.setError(null)}
         />
@@ -1172,7 +1201,7 @@ export default function App() {
             selectedInterface={selectedInterface}
             onClose={() => setDialog(null)}
             onCreate={createRoom}
-            onJoinDiscovered={joinDiscovered}
+            onProbe={roomController.probeRoom}
             onJoinManual={joinManual}
           />
         ) : null}
@@ -1188,6 +1217,7 @@ export default function App() {
         messages={roomController.messages}
         localStream={localStream}
         quality={quality}
+        syncLatencyTargetMs={roomController.syncLatencyTargetMs}
         paused={paused}
         annotations={roomController.annotations}
         annotationTool={annotationTool}
@@ -1217,6 +1247,20 @@ export default function App() {
           onClose={() => setCaptureOpen(false)}
           onSelect={roomController.startShare}
         />
+      ) : null}
+      {roomController.shareJoinNotice ? (
+        <div className="share-notice" role="status">
+          <span className="notice-icon">
+            <Icon name="users" size={17} />
+          </span>
+          <span>{roomController.shareJoinNotice}</span>
+          <button
+            type="button"
+            onClick={roomController.dismissShareJoinNotice}
+          >
+            <Icon name="close" size={15} />
+          </button>
+        </div>
       ) : null}
       {roomController.error ? (
         <div className="toast" role="alert">

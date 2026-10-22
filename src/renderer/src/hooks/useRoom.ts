@@ -4,8 +4,9 @@ import type {
   ChatMessage,
   IncomingAnnotation,
   PeerSummary,
-  RoomAnnouncement
+  RoomProbeResult
 } from "../../../shared/types";
+import { normalizeManualEndpoint } from "../../../shared/endpoint";
 
 export type QualityMode = "balanced" | "sharp" | "smooth";
 export type RoomConnectionStatus =
@@ -18,6 +19,14 @@ export type RoomConnectionStatus =
 export interface RoomViewPeer extends PeerSummary {
   stream: MediaStream | null;
   connectionState: RTCPeerConnectionState;
+  metrics: PeerConnectionMetrics;
+}
+
+export interface PeerConnectionMetrics {
+  pingMs: number | null;
+  syncBufferMs: number;
+  signal: "excellent" | "good" | "fair" | "poor" | "unknown";
+  adaptive: boolean;
 }
 
 export interface ActiveRoom {
@@ -54,6 +63,10 @@ interface PeerRuntime {
   makingOffer: boolean;
   connectionState: RTCPeerConnectionState;
   ready: Promise<void>;
+  metrics: PeerConnectionMetrics;
+  pendingPings: Map<string, number>;
+  lastNetworkReportAt: number;
+  remoteReportedRttMs: number | null;
 }
 
 interface ServerRoomState {
@@ -125,14 +138,27 @@ function createPeerId(): string {
   return id;
 }
 
-function normalizeManualEndpoint(input: string): string {
-  const trimmed = input.trim();
-  const value = /^wss?:\/\//i.test(trimmed) ? trimmed : `ws://${trimmed}`;
-  const url = new URL(value);
-  if (!url.port) {
-    throw new Error("请输入带端口的地址，例如 26.12.3.4:41000");
+const SYNC_LATENCY_TARGET_MS = 180;
+
+function signalFromPing(pingMs: number | null): PeerConnectionMetrics["signal"] {
+  if (pingMs === null) {
+    return "unknown";
   }
-  return url.toString();
+  if (pingMs < 55) {
+    return "excellent";
+  }
+  if (pingMs < 110) {
+    return "good";
+  }
+  if (pingMs < 220) {
+    return "fair";
+  }
+  return "poor";
+}
+
+function syncBufferForPing(pingMs: number | null): number {
+  const oneWayMs = (pingMs ?? 0) / 2;
+  return Math.round(Math.min(260, Math.max(40, SYNC_LATENCY_TARGET_MS - oneWayMs)));
 }
 
 export function useRoom() {
@@ -144,6 +170,7 @@ export function useRoom() {
   const [quality, setQualityState] = useState<QualityMode>("balanced");
   const [paused, setPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [shareJoinNotice, setShareJoinNotice] = useState<string | null>(null);
 
   const peerIdRef = useRef(createPeerId());
   const roomRef = useRef<ActiveRoom | null>(null);
@@ -155,6 +182,7 @@ export function useRoom() {
   const intentionalCloseRef = useRef(false);
   const initialStatusSentRef = useRef(false);
   const annotationTimersRef = useRef(new Map<string, number>());
+  const shareJoinNoticeTimerRef = useRef<number | null>(null);
   const qualityRef = useRef<QualityMode>("balanced");
   const pausedRef = useRef(false);
   const pendingJoinRef = useRef<PendingJoin | null>(null);
@@ -225,7 +253,8 @@ export function useRoom() {
         .map<RoomViewPeer>((peer) => ({
           ...peer.summary,
           stream: peer.remoteStream,
-          connectionState: peer.connectionState
+          connectionState: peer.connectionState,
+          metrics: { ...peer.metrics }
         }))
         .sort((a, b) => a.joinedAt - b.joinedAt)
     );
@@ -262,31 +291,147 @@ export function useRoom() {
     [sendWs]
   );
 
-  const setupDataChannel = useCallback((runtime: PeerRuntime, channel: RTCDataChannel) => {
-    runtime.channel = channel;
-    channel.onmessage = () => {
-      // Reserved for future low-latency cursor and quality requests.
-    };
-  }, []);
+  const applyReceiverLatency = useCallback(
+    (runtime: PeerRuntime, pingMs: number | null) => {
+      const bufferMs = syncBufferForPing(pingMs);
+      runtime.metrics.syncBufferMs = bufferMs;
+      for (const transceiver of runtime.pc.getTransceivers()) {
+        if (transceiver.receiver.track.kind !== "video") {
+          continue;
+        }
+        const receiver = transceiver.receiver as RTCRtpReceiver & {
+          playoutDelayHint?: number;
+        };
+        try {
+          receiver.playoutDelayHint = bufferMs / 1_000;
+        } catch {
+          // Older Chromium versions keep their native adaptive jitter buffer.
+        }
+      }
+    },
+    []
+  );
 
   const applySenderQuality = useCallback(async (runtime: PeerRuntime) => {
     if (!runtime.videoSender) {
       return;
     }
     const settings = QUALITY_SETTINGS[qualityRef.current];
+    const pressureRtt = Math.max(
+      runtime.metrics.pingMs ?? 0,
+      runtime.remoteReportedRttMs ?? 0
+    );
+    const constrained =
+      pressureRtt > 450
+        ? { maxBitrate: 900_000, scale: 2, frameRate: 20 }
+        : pressureRtt > 250
+          ? { maxBitrate: 2_000_000, scale: 1.5, frameRate: 24 }
+          : { maxBitrate: settings.maxBitrate, scale: 1, frameRate: settings.frameRate };
     try {
       const parameters = runtime.videoSender.getParameters();
       if (!parameters.encodings?.length) {
         parameters.encodings = [{}];
       }
-      for (const encoding of parameters.encodings) {
-        encoding.maxBitrate = settings.maxBitrate;
-      }
+      parameters.encodings[0].maxBitrate = constrained.maxBitrate;
+      parameters.encodings[0].scaleResolutionDownBy = constrained.scale;
+      parameters.encodings[0].maxFramerate = constrained.frameRate;
+      parameters.degradationPreference = "balanced";
       await runtime.videoSender.setParameters(parameters);
     } catch {
       // Some GPU/codec combinations do not allow bitrate changes at runtime.
     }
   }, []);
+
+  const sendDataPing = useCallback((runtime: PeerRuntime) => {
+    if (runtime.channel?.readyState !== "open") {
+      return;
+    }
+    const id = crypto.randomUUID();
+    runtime.pendingPings.set(id, performance.now());
+    runtime.channel.send(JSON.stringify({ type: "ping", id }));
+  }, []);
+
+  const setupDataChannel = useCallback(
+    (runtime: PeerRuntime, channel: RTCDataChannel) => {
+      if (runtime.channel === channel) {
+        return;
+      }
+      runtime.channel = channel;
+      channel.onopen = () => sendDataPing(runtime);
+      channel.onclose = () => {
+        runtime.metrics = {
+          ...runtime.metrics,
+          pingMs: null,
+          signal: "unknown"
+        };
+        publishPeers();
+      };
+      channel.onmessage = (event) => {
+        let message: Record<string, unknown>;
+        try {
+          message = JSON.parse(String(event.data)) as Record<string, unknown>;
+        } catch {
+          return;
+        }
+
+        if (message.type === "ping" && typeof message.id === "string") {
+          if (channel.readyState === "open") {
+            channel.send(JSON.stringify({ type: "pong", id: message.id }));
+          }
+          return;
+        }
+        if (message.type === "pong" && typeof message.id === "string") {
+          const startedAt = runtime.pendingPings.get(message.id);
+          if (startedAt === undefined) {
+            return;
+          }
+          runtime.pendingPings.delete(message.id);
+          const pingMs = Math.max(1, Math.round(performance.now() - startedAt));
+          runtime.metrics = {
+            pingMs,
+            syncBufferMs: runtime.metrics.syncBufferMs,
+            signal: signalFromPing(pingMs),
+            adaptive: pingMs > 220
+          };
+          applyReceiverLatency(runtime, pingMs);
+          void applySenderQuality(runtime);
+          publishPeers();
+
+          if (
+            pingMs > 220 &&
+            performance.now() - runtime.lastNetworkReportAt > 5_000
+          ) {
+            runtime.lastNetworkReportAt = performance.now();
+            channel.send(
+              JSON.stringify({ type: "network-report", rttMs: pingMs })
+            );
+          }
+          return;
+        }
+        if (message.type === "network-report") {
+          const reported = Number(message.rttMs);
+          if (!Number.isFinite(reported)) {
+            return;
+          }
+          runtime.remoteReportedRttMs = Math.min(5_000, Math.max(0, reported));
+          runtime.metrics = {
+            ...runtime.metrics,
+            adaptive:
+              (runtime.metrics.pingMs ?? 0) > 220 ||
+              runtime.remoteReportedRttMs > 220
+          };
+          void applySenderQuality(runtime);
+          publishPeers();
+        }
+      };
+    },
+    [
+      applyReceiverLatency,
+      applySenderQuality,
+      publishPeers,
+      sendDataPing
+    ]
+  );
 
   const bindNegotiatedSenders = useCallback((runtime: PeerRuntime) => {
     for (const transceiver of runtime.pc.getTransceivers()) {
@@ -390,7 +535,16 @@ export function useRoom() {
         pendingCandidates: [],
         makingOffer: false,
         connectionState: pc.connectionState,
-        ready: Promise.resolve()
+        ready: Promise.resolve(),
+        metrics: {
+          pingMs: null,
+          syncBufferMs: syncBufferForPing(null),
+          signal: "unknown",
+          adaptive: false
+        },
+        pendingPings: new Map(),
+        lastNetworkReportAt: 0,
+        remoteReportedRttMs: null
       };
       peersRef.current.set(summary.id, runtime);
 
@@ -404,6 +558,7 @@ export function useRoom() {
             publishPeers();
           }
         };
+        applyReceiverLatency(runtime, runtime.metrics.pingMs);
         publishPeers();
       };
 
@@ -441,6 +596,7 @@ export function useRoom() {
       return runtime;
     },
     [
+      applyReceiverLatency,
       attachLocalMedia,
       negotiate,
       publishPeers,
@@ -593,6 +749,22 @@ export function useRoom() {
           }
           return;
         }
+        case "viewer-joined": {
+          if (localStreamRef.current && message.viewer && typeof message.viewer === "object") {
+            const viewer = message.viewer as { name?: unknown };
+            const name =
+              typeof viewer.name === "string" ? viewer.name : "一位成员";
+            setShareJoinNotice(`${name} 已加入房间，正在观看你的屏幕`);
+            if (shareJoinNoticeTimerRef.current) {
+              window.clearTimeout(shareJoinNoticeTimerRef.current);
+            }
+            shareJoinNoticeTimerRef.current = window.setTimeout(() => {
+              setShareJoinNotice(null);
+              shareJoinNoticeTimerRef.current = null;
+            }, 5_000);
+          }
+          return;
+        }
         case "chat-history": {
           if (Array.isArray(message.messages)) {
             setMessages(message.messages as ChatMessage[]);
@@ -687,6 +859,11 @@ export function useRoom() {
     initialStatusSentRef.current = false;
     setMessages([]);
     setAnnotations([]);
+    setShareJoinNotice(null);
+    if (shareJoinNoticeTimerRef.current) {
+      window.clearTimeout(shareJoinNoticeTimerRef.current);
+      shareJoinNoticeTimerRef.current = null;
+    }
     for (const timer of annotationTimersRef.current.values()) {
       window.clearTimeout(timer);
     }
@@ -819,34 +996,81 @@ export function useRoom() {
     [connect]
   );
 
-  const joinDiscoveredRoom = useCallback(
-    async (
-      announcement: RoomAnnouncement,
-      password: string | undefined,
-      displayName: string
-    ) => {
-      await connect({
-        wsUrl: `ws://${announcement.hostAddress}:${announcement.signalingPort}`,
-        roomId: announcement.id,
-        password,
-        displayName,
-        isHost: false,
-        roomName: announcement.name,
-        hostName: announcement.hostName,
-        hasPassword: announcement.hasPassword
+  const probeRoom = useCallback(
+    (endpoint: string): Promise<RoomProbeResult> => {
+      const wsUrl = normalizeManualEndpoint(endpoint);
+      return new Promise((resolve, reject) => {
+        const socket = new WebSocket(wsUrl);
+        let settled = false;
+        const finish = (error?: Error, result?: RoomProbeResult) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          window.clearTimeout(timeout);
+          try {
+            socket.close();
+          } catch {
+            // The socket may already be closed by the host.
+          }
+          if (error) {
+            reject(error);
+          } else if (result) {
+            resolve(result);
+          }
+        };
+        const timeout = window.setTimeout(
+          () => finish(new Error("连接节点超时，请检查虚拟 IP 和防火墙")),
+          6_000
+        );
+
+        socket.onopen = () => {
+          socket.send(JSON.stringify({ type: "probe" }));
+        };
+        socket.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data) as Record<string, unknown>;
+            if (message.type === "room-probe" && message.result) {
+              const result = message.result as RoomProbeResult;
+              finish(undefined, {
+                ...result,
+                endpoint: wsUrl.replace(/^wss?:\/\//i, "").replace(/\/$/, "")
+              });
+            } else if (message.type === "error" && typeof message.message === "string") {
+              finish(new Error(message.message));
+            }
+          } catch {
+            finish(new Error("节点返回了无效数据"));
+          }
+        };
+        socket.onerror = () =>
+          finish(new Error("无法连接该 IP，请确认双方在同一虚拟局域网"));
+        socket.onclose = () => {
+          if (!settled) {
+            finish(new Error("房主关闭了连接"));
+          }
+        };
       });
     },
-    [connect]
+    []
   );
 
   const joinManualRoom = useCallback(
-    async (endpoint: string, password: string | undefined, displayName: string) => {
+    async (
+      endpoint: string,
+      password: string | undefined,
+      displayName: string,
+      probe?: RoomProbeResult
+    ) => {
       const wsUrl = normalizeManualEndpoint(endpoint);
       await connect({
         wsUrl,
         password,
         displayName,
-        isHost: false
+        isHost: false,
+        roomName: probe?.room.name,
+        hostName: probe?.room.hostName,
+        hasPassword: probe?.room.hasPassword
       });
     },
     [connect]
@@ -1021,6 +1245,57 @@ export function useRoom() {
     [sendWs]
   );
 
+  const refreshRttFromStats = useCallback(
+    async (runtime: PeerRuntime) => {
+      try {
+        const stats = await runtime.pc.getStats();
+        let pingMs: number | null = null;
+        for (const item of stats.values()) {
+          if (
+            item.type === "candidate-pair" &&
+            item.state === "succeeded" &&
+            typeof item.currentRoundTripTime === "number" &&
+            item.currentRoundTripTime > 0
+          ) {
+            const candidatePing = Math.round(item.currentRoundTripTime * 1_000);
+            pingMs = pingMs === null ? candidatePing : Math.min(pingMs, candidatePing);
+          }
+        }
+        if (
+          pingMs === null ||
+          !peersRef.current.has(runtime.summary.id)
+        ) {
+          return;
+        }
+        runtime.metrics = {
+          ...runtime.metrics,
+          pingMs,
+          signal: signalFromPing(pingMs),
+          adaptive: pingMs > 220
+        };
+        applyReceiverLatency(runtime, pingMs);
+        void applySenderQuality(runtime);
+        publishPeers();
+      } catch {
+        // Stats can disappear while the peer is closing.
+      }
+    },
+    [applyReceiverLatency, applySenderQuality, publishPeers]
+  );
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      for (const runtime of peersRef.current.values()) {
+        if (runtime.channel?.readyState === "open") {
+          sendDataPing(runtime);
+        } else {
+          void refreshRttFromStats(runtime);
+        }
+      }
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [refreshRttFromStats, sendDataPing]);
+
   useEffect(() => {
     const debugWindow = window as Window & {
       __nearviewDiagnostics?: () => Promise<unknown>;
@@ -1033,6 +1308,7 @@ export function useRoom() {
             peerId,
             connectionState: runtime.pc.connectionState,
             signalingState: runtime.pc.signalingState,
+            metrics: runtime.metrics,
             localSdpMedia:
               runtime.pc.localDescription?.sdp
                 .split("\n")
@@ -1062,7 +1338,13 @@ export function useRoom() {
                     muted: transceiver.receiver.track.muted,
                     readyState: transceiver.receiver.track.readyState
                   }
-                : null
+                : null,
+              playoutDelayHint:
+                (
+                  transceiver.receiver as RTCRtpReceiver & {
+                    playoutDelayHint?: number;
+                  }
+                ).playoutDelayHint ?? null
             })),
             stats: [...stats.values()]
               .filter(
@@ -1094,6 +1376,9 @@ export function useRoom() {
       }
       localStreamRef.current?.getTracks().forEach((track) => track.stop());
       pausedTrackRef.current?.stop();
+      if (shareJoinNoticeTimerRef.current) {
+        window.clearTimeout(shareJoinNoticeTimerRef.current);
+      }
       if (freezeTimerRef.current) {
         window.clearInterval(freezeTimerRef.current);
       }
@@ -1114,7 +1399,6 @@ export function useRoom() {
     error,
     setError,
     createRoom,
-    joinDiscoveredRoom,
     joinManualRoom,
     leaveRoom,
     startShare,
@@ -1123,6 +1407,10 @@ export function useRoom() {
     applyQuality,
     sendChat,
     sendClipboard,
-    sendAnnotation
+    sendAnnotation,
+    probeRoom,
+    shareJoinNotice,
+    dismissShareJoinNotice: () => setShareJoinNotice(null),
+    syncLatencyTargetMs: SYNC_LATENCY_TARGET_MS
   };
 }

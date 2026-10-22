@@ -33,7 +33,8 @@ Electron screen capture and WebRTC ICE behavior cannot be fully validated in a s
 
 - Windows-to-Windows over Wi-Fi and Ethernet;
 - at least one virtual adapter such as Radmin VPN or Tailscale;
-- multicast-enabled and multicast-blocked network;
+- default-port and non-default-port IP joins;
+- virtual-LAN IP probe followed by password-protected join;
 - screen and window capture;
 - password-protected room;
 - two or more simultaneous sharers.
@@ -43,7 +44,7 @@ Electron screen capture and WebRTC ICE behavior cannot be fully validated in a s
 Use a short imperative subject, for example:
 
 ```text
-Add multicast room discovery
+Improve synchronized playout buffering
 Fix paused stream renegotiation
 ```
 

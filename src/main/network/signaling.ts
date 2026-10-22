@@ -4,8 +4,10 @@ import type {
   ChatMessage,
   IncomingAnnotation,
   PeerSummary,
+  RoomProbeResult,
   RoomSummary
 } from "../../shared/types";
+import { DEFAULT_SIGNALING_PORT } from "../../shared/endpoint";
 
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const MAX_CHAT_LENGTH = 4_000;
@@ -20,6 +22,7 @@ interface SignalingOptions {
   roomName: string;
   hostName: string;
   password?: string;
+  preferredPort?: number;
   onMemberCountChanged?: (count: number) => void;
 }
 
@@ -61,6 +64,7 @@ interface AnnotationMessage {
 
 type ClientMessage =
   | JoinMessage
+  | { type: "probe" }
   | RelayMessage
   | StatusMessage
   | ChatSendMessage
@@ -125,16 +129,31 @@ export class SignalingServer {
   }
 
   static async start(options: SignalingOptions): Promise<SignalingServer> {
-    const wss = new WebSocketServer({
-      host: "0.0.0.0",
-      port: 0,
-      maxPayload: MAX_MESSAGE_BYTES
-    });
+    const listen = async (port: number): Promise<WebSocketServer> => {
+      const server = new WebSocketServer({
+        host: "0.0.0.0",
+        port,
+        maxPayload: MAX_MESSAGE_BYTES
+      });
+      await new Promise<void>((resolve, reject) => {
+        server.once("listening", resolve);
+        server.once("error", reject);
+      });
+      return server;
+    };
 
-    await new Promise<void>((resolve, reject) => {
-      wss.once("listening", resolve);
-      wss.once("error", reject);
-    });
+    let wss: WebSocketServer;
+    try {
+      wss = await listen(options.preferredPort ?? DEFAULT_SIGNALING_PORT);
+    } catch (error) {
+      if (
+        options.preferredPort === undefined ||
+        !(error instanceof Error && "code" in error && error.code === "EADDRINUSE")
+      ) {
+        throw error;
+      }
+      wss = await listen(0);
+    }
 
     const address = wss.address();
     if (!address || typeof address === "string") {
@@ -201,6 +220,18 @@ export class SignalingServer {
       }
 
       if (!joined) {
+        if (message.type === "probe") {
+          const probe: RoomProbeResult = {
+            room: this.room,
+            memberCount: this.members.size,
+            sharingCount: [...this.members.values()].filter(
+              (member) => member.sharing
+            ).length,
+            endpoint: ""
+          };
+          safeSend(socket, { type: "room-probe", result: probe });
+          return;
+        }
         if (message.type !== "join") {
           safeSend(socket, { type: "error", code: "join_required", message: "请先加入房间" });
           return;
@@ -270,8 +301,17 @@ export class SignalingServer {
       socket,
       alive: true
     };
+    const sharingMembers = [...this.members.values()].filter(
+      (item) => item.sharing
+    );
     this.members.set(peerId, member);
     this.clients.set(socket, peerId);
+    for (const sharingMember of sharingMembers) {
+      safeSend(sharingMember.socket, {
+        type: "viewer-joined",
+        viewer: { id: member.id, name: member.name }
+      });
+    }
     this.broadcastRoomState();
     safeSend(socket, { type: "chat-history", messages: this.chatHistory });
     this.notifyMemberCount();

@@ -221,6 +221,22 @@ try {
   if (!endpoint) {
     throw new Error("Room invite endpoint was not rendered");
   }
+  const joinAddress = endpoint.endsWith(":42800")
+    ? endpoint.slice(0, -6)
+    : endpoint;
+
+  await alicePage.evaluate(click(".share-button"));
+  await waitFor(
+    alicePage,
+    "document.querySelectorAll('.capture-item').length > 0",
+    "Capture sources"
+  );
+  await alicePage.evaluate(click(".capture-item"));
+  await waitFor(
+    alicePage,
+    "Boolean(document.querySelector('.stream-tile.has-stream'))",
+    "Alice local preview"
+  );
 
   await bobPage.evaluate(click(".hero-actions .secondary-button"));
   await waitFor(
@@ -229,7 +245,12 @@ try {
     "Bob manual join dialog"
   );
   await bobPage.evaluate(
-    setInput(".action-modal .field input", endpoint)
+    setInput(".action-modal .field input", joinAddress)
+  );
+  await waitFor(
+    bobPage,
+    "document.querySelector('.probe-card')?.innerText.includes('1 路屏幕正在共享')",
+    "Bob discovers active sharing by IP"
   );
   await bobPage.evaluate(
     click(".action-modal .modal-actions .primary-button")
@@ -249,18 +270,10 @@ try {
     "document.querySelectorAll('.member-row').length >= 2",
     "Bob sees Alice"
   );
-
-  await alicePage.evaluate(click(".share-button"));
   await waitFor(
     alicePage,
-    "document.querySelectorAll('.capture-item').length > 0",
-    "Capture sources"
-  );
-  await alicePage.evaluate(click(".capture-item"));
-  await waitFor(
-    alicePage,
-    "Boolean(document.querySelector('.stream-tile.has-stream'))",
-    "Alice local preview"
+    "Boolean(document.querySelector('.share-notice'))",
+    "Sharer receives viewer-joined notice"
   );
   await waitFor(
     bobPage,
@@ -286,6 +299,14 @@ try {
       })),
       runtime: await window.__nearviewDiagnostics?.()
     }))()`
+  );
+  await waitFor(
+    bobPage,
+    `(() => {
+      const value = document.querySelector(".member-row .signal-meter small")?.textContent || "";
+      return /\\d+ms/.test(value);
+    })()`,
+    "Peer PING metric"
   );
 
   await bobPage.evaluate(`(() => {
@@ -335,19 +356,46 @@ try {
           directions: peer.transceivers.map((item) => ({
             kind: item.senderTrack?.kind,
             direction: item.direction,
-            currentDirection: item.currentDirection
-          }))
+            currentDirection: item.currentDirection,
+            playoutDelayMs:
+              typeof item.playoutDelayHint === "number"
+                ? Math.round(item.playoutDelayHint * 1000)
+                : null
+          })),
+          metrics: peer.metrics
         })))`
       )
     )
   );
+  const videoPlayoutDelays = directionSnapshot
+    .flatMap((peers) => peers)
+    .flatMap((peer) => peer.directions)
+    .filter(
+      (direction) =>
+        direction.kind === "video" &&
+        typeof direction.playoutDelayMs === "number"
+    )
+    .map((direction) => direction.playoutDelayMs);
+  if (videoPlayoutDelays.length < 2) {
+    throw new Error("Unified playout delay was not applied on both peers");
+  }
+  if (Math.max(...videoPlayoutDelays) - Math.min(...videoPlayoutDelays) > 30) {
+    throw new Error(
+      `Playout delay mismatch: ${videoPlayoutDelays.join(", ")}ms`
+    );
+  }
 
   console.log(
     JSON.stringify(
       {
         ok: true,
         endpoint,
+        joinAddress,
         members: 2,
+        sharingDiscovery: true,
+        sharerNotice: true,
+        pingMetric: true,
+        unifiedPlayoutDelayMs: videoPlayoutDelays,
         webrtcVideo: true,
         directionSnapshot,
         chat: true,

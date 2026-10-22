@@ -7,18 +7,6 @@ export interface NetworkInterfaceInfo {
   recommended: boolean;
 }
 
-export interface RoomAnnouncement {
-  id: string;
-  name: string;
-  hostName: string;
-  hostAddress: string;
-  signalingPort: number;
-  hasPassword: boolean;
-  memberCount: number;
-  createdAt: number;
-  lastSeen: number;
-}
-
 export interface CreateRoomRequest {
   roomName: string;
   hostName: string;
@@ -49,6 +37,13 @@ export interface RoomSummary {
   name: string;
   hasPassword: boolean;
   hostName: string;
+}
+
+export interface RoomProbeResult {
+  room: RoomSummary;
+  memberCount: number;
+  sharingCount: number;
+  endpoint: string;
 }
 
 export interface ChatMessage {
@@ -86,9 +81,6 @@ export interface IncomingAnnotation extends AnnotationPayload {
 
 export type NearViewApi = {
   getNetworkInterfaces: () => Promise<NetworkInterfaceInfo[]>;
-  startDiscovery: (interfaceAddress?: string) => Promise<RoomAnnouncement[]>;
-  stopDiscovery: () => Promise<void>;
-  onDiscoveredRooms: (callback: (rooms: RoomAnnouncement[]) => void) => () => void;
   createRoom: (request: CreateRoomRequest) => Promise<CreatedRoom>;
   leaveRoom: () => Promise<void>;
   getCaptureSources: () => Promise<CaptureSource[]>;

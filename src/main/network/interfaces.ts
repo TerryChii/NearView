@@ -52,30 +52,3 @@ export function chooseInterfaceAddress(preferred?: string): string | undefined {
   }
   return interfaces[0]?.address;
 }
-
-export function normalizeManualEndpoint(input: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    throw new Error("请输入房主地址");
-  }
-
-  const withProtocol = /^wss?:\/\//i.test(trimmed)
-    ? trimmed
-    : `ws://${trimmed}`;
-
-  let url: URL;
-  try {
-    url = new URL(withProtocol);
-  } catch {
-    throw new Error("地址格式不正确，请使用 IP:端口");
-  }
-
-  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-    throw new Error("仅支持 ws:// 或 wss:// 地址");
-  }
-  if (!url.port) {
-    throw new Error("地址中需要包含信令端口，例如 26.12.3.4:41000");
-  }
-
-  return url.toString();
-}
