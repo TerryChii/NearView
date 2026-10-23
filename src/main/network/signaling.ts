@@ -17,6 +17,7 @@ const MAX_CHAT_HISTORY = 80;
 interface Member extends PeerSummary {
   socket: WebSocket;
   alive: boolean;
+  syncRttMs: number;
 }
 
 interface SignalingOptions {
@@ -36,6 +37,8 @@ interface JoinMessage {
   password?: string;
   peerId: string;
   name: string;
+  bio?: string;
+  avatarColor?: string;
 }
 
 interface RelayMessage {
@@ -73,6 +76,7 @@ type ClientMessage =
   | StatusMessage
   | ChatSendMessage
   | AnnotationMessage
+  | { type: "sync-report"; maxRttMs: number }
   | { type: "ping" };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -86,6 +90,12 @@ function normalizeName(value: unknown, fallback = ""): string {
 function clamp01(value: unknown): number {
   const number = typeof value === "number" ? value : 0;
   return Math.min(1, Math.max(0, number));
+}
+
+function normalizeColor(value: unknown): string {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)
+    ? value
+    : "#17634f";
 }
 
 function safeSend(socket: WebSocket, message: unknown): void {
@@ -263,6 +273,7 @@ export class SignalingServer {
         this.broadcast({ type: "peer-left", peerId });
         this.broadcastRoomState();
         this.notifyMemberCount();
+        this.recomputeSyncPolicy();
       }
     });
 
@@ -286,6 +297,11 @@ export class SignalingServer {
 
     const peerId = normalizeName(message.peerId);
     const name = normalizeName(message.name, "访客");
+    const bio =
+      typeof message.bio === "string"
+        ? message.bio.trim().slice(0, 80)
+        : "";
+    const avatarColor = normalizeColor(message.avatarColor);
     if (!peerId || peerId.length > 80) {
       safeSend(socket, { type: "error", code: "bad_peer", message: "设备标识无效" });
       socket.close(4000, "Bad peer");
@@ -300,12 +316,15 @@ export class SignalingServer {
     const member: Member = {
       id: peerId,
       name,
+      bio,
+      avatarColor,
       joinedAt: Date.now(),
       sharing: false,
       paused: false,
       quality: "balanced",
       socket,
-      alive: true
+      alive: true,
+      syncRttMs: 0
     };
     const sharingMembers = [...this.members.values()].filter(
       (item) => item.sharing
@@ -362,6 +381,7 @@ export class SignalingServer {
           id: randomUUID(),
           peerId: member.id,
           peerName: member.name,
+          avatarColor: member.avatarColor,
           text,
           sentAt: Date.now()
         };
@@ -370,6 +390,15 @@ export class SignalingServer {
           this.chatHistory.shift();
         }
         this.broadcast({ type: "chat", message: chat });
+        return;
+      }
+      case "sync-report": {
+        const rtt = Number(message.maxRttMs);
+        if (!Number.isFinite(rtt)) {
+          return;
+        }
+        member.syncRttMs = Math.min(5_000, Math.max(0, rtt));
+        this.recomputeSyncPolicy();
         return;
       }
       case "annotation": {
@@ -401,9 +430,11 @@ export class SignalingServer {
 
   private broadcastRoomState(): void {
     const peers = [...this.members.values()].map<PeerSummary>(
-      ({ id, name, joinedAt, sharing, paused, quality }) => ({
+      ({ id, name, bio, avatarColor, joinedAt, sharing, paused, quality }) => ({
         id,
         name,
+        bio,
+        avatarColor,
         joinedAt,
         sharing,
         paused,
@@ -429,6 +460,18 @@ export class SignalingServer {
 
   private notifyMemberCount(): void {
     this.onMemberCount?.(this.members.size);
+  }
+
+  private recomputeSyncPolicy(): void {
+    const rtts = [...this.members.values()]
+      .map((member) => member.syncRttMs)
+      .filter((rtt) => rtt > 0);
+    const worstRtt = rtts.length > 0 ? Math.max(...rtts) : 0;
+    const targetLatencyMs =
+      worstRtt > 0
+        ? Math.round(Math.min(240, Math.max(50, worstRtt / 2 + 45)))
+        : 80;
+    this.broadcast({ type: "sync-policy", targetLatencyMs });
   }
 
   private onMemberCount?: (count: number) => void;

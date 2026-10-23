@@ -9,6 +9,18 @@ export interface NetworkInterfaceInfo {
 
 export type NetworkMode = "local" | "virtual";
 
+export interface UserProfile {
+  name: string;
+  bio: string;
+  avatarColor: string;
+}
+
+export type CloseBehavior = "ask" | "minimize" | "quit";
+
+export interface AppPreferences {
+  closeBehavior: CloseBehavior;
+}
+
 export interface CreateRoomRequest {
   roomName: string;
   hostName: string;
@@ -31,6 +43,8 @@ export interface CreatedRoom {
 export interface PeerSummary {
   id: string;
   name: string;
+  bio: string;
+  avatarColor: string;
   joinedAt: number;
   sharing: boolean;
   paused: boolean;
@@ -57,6 +71,7 @@ export interface ChatMessage {
   id: string;
   peerId: string;
   peerName: string;
+  avatarColor: string;
   text: string;
   sentAt: number;
 }
@@ -68,6 +83,7 @@ export interface CaptureSource {
   name: string;
   kind: CaptureSourceKind;
   thumbnail: string;
+  displayId: string;
 }
 
 export interface AnnotationPayload {
@@ -94,5 +110,11 @@ export type NearViewApi = {
   selectCaptureSource: (sourceId: string) => Promise<void>;
   writeClipboard: (text: string) => Promise<void>;
   readClipboard: () => Promise<string>;
+  getPreferences: () => Promise<AppPreferences>;
+  setPreferences: (preferences: Partial<AppPreferences>) => Promise<AppPreferences>;
+  onScreenAnnotation: (callback: (annotation: IncomingAnnotation) => void) => () => void;
+  onScreenAnnotationsClear: (callback: () => void) => () => void;
+  showScreenAnnotation: (annotation: IncomingAnnotation) => Promise<void>;
+  clearScreenAnnotations: () => Promise<void>;
   getVersion: () => Promise<string>;
 };

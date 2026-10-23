@@ -5,7 +5,8 @@ import type {
   IncomingAnnotation,
   NetworkMode,
   PeerSummary,
-  RoomProbeResult
+  RoomProbeResult,
+  UserProfile
 } from "../../../shared/types";
 import { normalizeManualEndpoint } from "../../../shared/endpoint";
 
@@ -26,6 +27,7 @@ export interface RoomViewPeer extends PeerSummary {
 export interface PeerConnectionMetrics {
   pingMs: number | null;
   syncBufferMs: number;
+  targetLatencyMs: number;
   signal: "excellent" | "good" | "fair" | "poor" | "unknown";
   adaptive: boolean;
 }
@@ -40,6 +42,8 @@ export interface ActiveRoom {
   selfId: string;
   isHost: boolean;
   selfName: string;
+  selfBio: string;
+  selfAvatarColor: string;
   wsUrl: string;
   status: RoomConnectionStatus;
 }
@@ -55,6 +59,8 @@ interface JoinOptions {
   hasPassword?: boolean;
   networkMode?: NetworkMode;
   adapterName?: string;
+  bio?: string;
+  avatarColor?: string;
 }
 
 interface PeerRuntime {
@@ -72,6 +78,7 @@ interface PeerRuntime {
   pendingPings: Map<string, number>;
   lastNetworkReportAt: number;
   remoteReportedRttMs: number | null;
+  syncTargetMs: number;
 }
 
 interface ServerRoomState {
@@ -145,7 +152,9 @@ function createPeerId(): string {
   return id;
 }
 
-const SYNC_LATENCY_TARGET_MS = 180;
+const MIN_SYNC_TARGET_MS = 50;
+const DEFAULT_SYNC_TARGET_MS = 80;
+const MAX_SYNC_TARGET_MS = 240;
 
 function signalFromPing(pingMs: number | null): PeerConnectionMetrics["signal"] {
   if (pingMs === null) {
@@ -163,21 +172,32 @@ function signalFromPing(pingMs: number | null): PeerConnectionMetrics["signal"] 
   return "poor";
 }
 
-function syncBufferForPing(pingMs: number | null): number {
+function syncBufferForTarget(
+  targetLatencyMs: number,
+  pingMs: number | null
+): number {
   const oneWayMs = (pingMs ?? 0) / 2;
-  return Math.round(Math.min(260, Math.max(40, SYNC_LATENCY_TARGET_MS - oneWayMs)));
+  return Math.round(
+    Math.min(
+      260,
+      Math.max(30, targetLatencyMs - oneWayMs)
+    )
+  );
 }
 
-export function useRoom() {
+export function useRoom(initialQuality: QualityMode = "balanced") {
   const [room, setRoom] = useState<ActiveRoom | null>(null);
   const [peers, setPeers] = useState<RoomViewPeer[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [annotations, setAnnotations] = useState<IncomingAnnotation[]>([]);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [quality, setQualityState] = useState<QualityMode>("balanced");
+  const [quality, setQualityState] = useState<QualityMode>(initialQuality);
   const [paused, setPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [shareJoinNotice, setShareJoinNotice] = useState<string | null>(null);
+  const [adaptiveSyncTargetMs, setAdaptiveSyncTargetMs] = useState(
+    DEFAULT_SYNC_TARGET_MS
+  );
 
   const peerIdRef = useRef(createPeerId());
   const roomRef = useRef<ActiveRoom | null>(null);
@@ -190,12 +210,13 @@ export function useRoom() {
   const initialStatusSentRef = useRef(false);
   const annotationTimersRef = useRef(new Map<string, number>());
   const shareJoinNoticeTimerRef = useRef<number | null>(null);
-  const qualityRef = useRef<QualityMode>("balanced");
+  const qualityRef = useRef<QualityMode>(initialQuality);
   const pausedRef = useRef(false);
   const pendingJoinRef = useRef<PendingJoin | null>(null);
   const placeholderRef = useRef<PlaceholderMedia | null>(null);
   const roomStateReadyRef = useRef<Promise<void>>(Promise.resolve());
   const resolveRoomStateReadyRef = useRef<(() => void) | null>(null);
+  const lastSyncReportAtRef = useRef(0);
 
   const getPlaceholderMedia = useCallback((): PlaceholderMedia => {
     const existing = placeholderRef.current;
@@ -299,9 +320,13 @@ export function useRoom() {
   );
 
   const applyReceiverLatency = useCallback(
-    (runtime: PeerRuntime, pingMs: number | null) => {
-      const bufferMs = syncBufferForPing(pingMs);
+    (runtime: PeerRuntime) => {
+      const bufferMs = syncBufferForTarget(
+        runtime.syncTargetMs,
+        runtime.metrics.pingMs
+      );
       runtime.metrics.syncBufferMs = bufferMs;
+      runtime.metrics.targetLatencyMs = runtime.syncTargetMs;
       for (const transceiver of runtime.pc.getTransceivers()) {
         if (transceiver.receiver.track.kind !== "video") {
           continue;
@@ -348,6 +373,29 @@ export function useRoom() {
       // Some GPU/codec combinations do not allow bitrate changes at runtime.
     }
   }, []);
+
+  const reportSyncRtt = useCallback(
+    (force = false) => {
+      const now = performance.now();
+      if (!force && now - lastSyncReportAtRef.current < 4_000) {
+        return;
+      }
+      const rtts = [...peersRef.current.values()]
+        .map((runtime) =>
+          Math.max(
+            runtime.metrics.pingMs ?? 0,
+            runtime.remoteReportedRttMs ?? 0
+          )
+        )
+        .filter((rtt) => rtt > 0);
+      if (!rtts.length) {
+        return;
+      }
+      lastSyncReportAtRef.current = now;
+      sendWs({ type: "sync-report", maxRttMs: Math.max(...rtts) });
+    },
+    [sendWs]
+  );
 
   const sendDataPing = useCallback((runtime: PeerRuntime) => {
     if (runtime.channel?.readyState !== "open") {
@@ -397,17 +445,16 @@ export function useRoom() {
           runtime.metrics = {
             pingMs,
             syncBufferMs: runtime.metrics.syncBufferMs,
+            targetLatencyMs: runtime.syncTargetMs,
             signal: signalFromPing(pingMs),
             adaptive: pingMs > 220
           };
-          applyReceiverLatency(runtime, pingMs);
+          applyReceiverLatency(runtime);
+          reportSyncRtt();
           void applySenderQuality(runtime);
           publishPeers();
 
-          if (
-            pingMs > 220 &&
-            performance.now() - runtime.lastNetworkReportAt > 5_000
-          ) {
+          if (performance.now() - runtime.lastNetworkReportAt > 5_000) {
             runtime.lastNetworkReportAt = performance.now();
             channel.send(
               JSON.stringify({ type: "network-report", rttMs: pingMs })
@@ -427,6 +474,7 @@ export function useRoom() {
               (runtime.metrics.pingMs ?? 0) > 220 ||
               runtime.remoteReportedRttMs > 220
           };
+          reportSyncRtt();
           void applySenderQuality(runtime);
           publishPeers();
         }
@@ -435,6 +483,7 @@ export function useRoom() {
     [
       applyReceiverLatency,
       applySenderQuality,
+      reportSyncRtt,
       publishPeers,
       sendDataPing
     ]
@@ -545,13 +594,15 @@ export function useRoom() {
         ready: Promise.resolve(),
         metrics: {
           pingMs: null,
-          syncBufferMs: syncBufferForPing(null),
+          syncBufferMs: syncBufferForTarget(DEFAULT_SYNC_TARGET_MS, null),
+          targetLatencyMs: DEFAULT_SYNC_TARGET_MS,
           signal: "unknown",
           adaptive: false
         },
         pendingPings: new Map(),
         lastNetworkReportAt: 0,
-        remoteReportedRttMs: null
+        remoteReportedRttMs: null,
+        syncTargetMs: DEFAULT_SYNC_TARGET_MS
       };
       peersRef.current.set(summary.id, runtime);
 
@@ -565,7 +616,7 @@ export function useRoom() {
             publishPeers();
           }
         };
-        applyReceiverLatency(runtime, runtime.metrics.pingMs);
+        applyReceiverLatency(runtime);
         publishPeers();
       };
 
@@ -639,6 +690,8 @@ export function useRoom() {
         runtime = ensurePeer({
           id: fromPeerId,
           name: "成员",
+          bio: "",
+          avatarColor: "#17634f",
           joinedAt: Date.now(),
           sharing: false,
           paused: false,
@@ -774,6 +827,27 @@ export function useRoom() {
           }
           return;
         }
+        case "sync-policy": {
+          if (
+            typeof message.targetLatencyMs === "number"
+          ) {
+            const targetLatencyMs = Math.round(
+              Math.min(
+                MAX_SYNC_TARGET_MS,
+                Math.max(MIN_SYNC_TARGET_MS, message.targetLatencyMs)
+              )
+            );
+            for (const runtime of peersRef.current.values()) {
+              runtime.syncTargetMs = Math.round(
+                targetLatencyMs
+              );
+              applyReceiverLatency(runtime);
+            }
+            setAdaptiveSyncTargetMs(targetLatencyMs);
+            publishPeers();
+          }
+          return;
+        }
         case "chat-history": {
           if (Array.isArray(message.messages)) {
             setMessages(message.messages as ChatMessage[]);
@@ -795,6 +869,12 @@ export function useRoom() {
           if (message.annotation && typeof message.annotation === "object") {
             const annotation = message.annotation as IncomingAnnotation;
             setAnnotations((current) => [...current, annotation].slice(-30));
+            if (
+              annotation.targetPeerId === roomRef.current?.selfId &&
+              localStreamRef.current
+            ) {
+              void window.nearview.showScreenAnnotation(annotation);
+            }
             const timer = window.setTimeout(() => {
               setAnnotations((current) =>
                 current.filter((item) => item.id !== annotation.id)
@@ -824,8 +904,10 @@ export function useRoom() {
     },
     [
       ensurePeer,
+      applyReceiverLatency,
       handleSignal,
       removePeer,
+      publishPeers,
       sendStatus,
       updateRoomStatus
     ]
@@ -868,6 +950,9 @@ export function useRoom() {
     initialStatusSentRef.current = false;
     setMessages([]);
     setAnnotations([]);
+    lastSyncReportAtRef.current = 0;
+    setAdaptiveSyncTargetMs(DEFAULT_SYNC_TARGET_MS);
+    void window.nearview.clearScreenAnnotations();
     setShareJoinNotice(null);
     if (shareJoinNoticeTimerRef.current) {
       window.clearTimeout(shareJoinNoticeTimerRef.current);
@@ -908,6 +993,8 @@ export function useRoom() {
         selfId: peerIdRef.current,
         isHost: options.isHost,
         selfName: options.displayName,
+        selfBio: options.bio ?? "",
+        selfAvatarColor: options.avatarColor ?? "#17634f",
         wsUrl: options.wsUrl,
         status: "joining"
       };
@@ -936,7 +1023,9 @@ export function useRoom() {
               roomId: options.roomId || undefined,
               password: options.password || undefined,
               peerId: peerIdRef.current,
-              name: options.displayName.trim().slice(0, 32) || "访客"
+              name: options.displayName.trim().slice(0, 32) || "访客",
+              bio: options.bio ?? "",
+              avatarColor: options.avatarColor ?? "#17634f"
             })
           );
           updateRoomStatus("joining");
@@ -978,14 +1067,14 @@ export function useRoom() {
     async (request: {
       roomName: string;
       password?: string;
-      displayName: string;
+      profile: UserProfile;
       interfaceAddress?: string;
       networkMode: NetworkMode;
     }) => {
       const created = await window.nearview.createRoom({
         roomName: request.roomName,
         password: request.password,
-        hostName: request.displayName,
+        hostName: request.profile.name,
         interfaceAddress: request.interfaceAddress,
         networkMode: request.networkMode
       });
@@ -994,13 +1083,16 @@ export function useRoom() {
           wsUrl: created.wsUrl,
           roomId: created.id,
           password: request.password,
-          displayName: request.displayName,
+          displayName: request.profile.name,
           isHost: true,
           roomName: created.name,
-          hostName: request.displayName,
+          hostName: request.profile.name,
           hasPassword: Boolean(request.password),
           networkMode: created.networkMode,
           adapterName: created.adapterName
+          ,
+          bio: request.profile.bio,
+          avatarColor: request.profile.avatarColor
         }, false);
         return created;
       } catch (reason) {
@@ -1074,20 +1166,23 @@ export function useRoom() {
     async (
       endpoint: string,
       password: string | undefined,
-      displayName: string,
+      profile: UserProfile,
       probe?: RoomProbeResult
     ) => {
       const wsUrl = normalizeManualEndpoint(endpoint);
       await connect({
         wsUrl,
         password,
-        displayName,
+        displayName: profile.name,
         isHost: false,
         roomName: probe?.room.name,
         hostName: probe?.room.hostName,
         hasPassword: probe?.room.hasPassword,
         networkMode: probe?.room.networkMode,
         adapterName: probe?.room.adapterName
+        ,
+        bio: profile.bio,
+        avatarColor: profile.avatarColor
       });
     },
     [connect]
@@ -1159,8 +1254,10 @@ export function useRoom() {
         )
       );
       sendStatus({ sharing: true, paused: false });
+      reportSyncRtt(true);
+    void window.nearview.clearScreenAnnotations();
     },
-    [applySenderQuality, replaceOutgoingTracks, sendStatus]
+    [applySenderQuality, replaceOutgoingTracks, reportSyncRtt, sendStatus]
   );
 
   const stopShare = useCallback(async () => {
@@ -1178,6 +1275,9 @@ export function useRoom() {
     stream?.getTracks().forEach((track) => track.stop());
     await replaceOutgoingTracks();
     sendStatus({ sharing: false, paused: false });
+    void window.nearview.clearScreenAnnotations();
+    lastSyncReportAtRef.current = 0;
+    setAdaptiveSyncTargetMs(DEFAULT_SYNC_TARGET_MS);
   }, [replaceOutgoingTracks, sendStatus]);
 
   const toggleFreeze = useCallback(async () => {
@@ -1290,7 +1390,7 @@ export function useRoom() {
           signal: signalFromPing(pingMs),
           adaptive: pingMs > 220
         };
-        applyReceiverLatency(runtime, pingMs);
+        applyReceiverLatency(runtime);
         void applySenderQuality(runtime);
         publishPeers();
       } catch {
@@ -1402,6 +1502,7 @@ export function useRoom() {
       for (const timer of annotationTimersRef.current.values()) {
         window.clearTimeout(timer);
       }
+      void window.nearview.clearScreenAnnotations();
     };
   }, [disposePlaceholderMedia]);
 
@@ -1428,6 +1529,6 @@ export function useRoom() {
     probeRoom,
     shareJoinNotice,
     dismissShareJoinNotice: () => setShareJoinNotice(null),
-    syncLatencyTargetMs: SYNC_LATENCY_TARGET_MS
+    syncLatencyTargetMs: adaptiveSyncTargetMs
   };
 }

@@ -113,13 +113,8 @@ try {
   }
 
   await client.evaluate(`(() => {
-    const input = document.querySelector(".profile-field input");
-    const setter = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      "value"
-    ).set;
-    setter.call(input, "松果 26");
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const name = document.querySelector(".profile-button .profile-copy strong");
+    if (name) name.textContent = "松果 26";
     return true;
   })()`);
   await delay(250);

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -7,9 +7,14 @@ import {
   BrowserWindow,
   clipboard,
   desktopCapturer,
+  dialog,
   ipcMain,
+  Menu,
+  nativeImage,
+  screen,
   session,
-  shell
+  shell,
+  Tray
 } from "electron";
 import {
   chooseInterfaceAddress,
@@ -17,29 +22,239 @@ import {
 } from "./network/interfaces";
 import { SignalingServer } from "./network/signaling";
 import type {
+  AppPreferences,
   CaptureSource,
   CreateRoomRequest,
-  CreatedRoom
+  CreatedRoom,
+  IncomingAnnotation
 } from "../shared/types";
 import { DEFAULT_SIGNALING_PORT } from "../shared/endpoint";
 
 app.commandLine.appendSwitch("disable-features", "WebRtcHideLocalIpsWithMdns");
 
 let mainWindow: BrowserWindow | null = null;
+let annotationOverlay: BrowserWindow | null = null;
+let tray: Tray | null = null;
 let signalingServer: SignalingServer | null = null;
 let createdRoom: CreatedRoom | null = null;
 let selectedCaptureSourceId: string | null = null;
+let selectedCaptureSource: CaptureSource | null = null;
+const knownCaptureSources = new Map<string, CaptureSource>();
 let roomCreationInFlight = false;
+let isQuitting = false;
+let closePromptOpen = false;
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_PREFERENCES: AppPreferences = { closeBehavior: "ask" };
+const automationMode =
+  process.env.NEARVIEW_HEADLESS === "1" ||
+  Boolean(process.env.NEARVIEW_CAPTURE_PATH || process.env.NEARVIEW_SMOKE_REPORT);
+
+function iconPath(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "icon.png")
+    : path.join(currentDirectory, "../../resources/icon.png");
+}
+
+function preferencesPath(): string {
+  return path.join(app.getPath("userData"), "preferences.json");
+}
+
+async function readPreferences(): Promise<AppPreferences> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(preferencesPath(), "utf8")
+    ) as Partial<AppPreferences>;
+    return {
+      closeBehavior: ["ask", "minimize", "quit"].includes(
+        parsed.closeBehavior ?? ""
+      )
+        ? (parsed.closeBehavior as AppPreferences["closeBehavior"])
+        : "ask"
+    };
+  } catch {
+    return { ...DEFAULT_PREFERENCES };
+  }
+}
+
+async function savePreferences(
+  update: Partial<AppPreferences>
+): Promise<AppPreferences> {
+  const current = await readPreferences();
+  const next: AppPreferences = {
+    ...current,
+    ...(update.closeBehavior && ["ask", "minimize", "quit"].includes(update.closeBehavior)
+      ? { closeBehavior: update.closeBehavior }
+      : {})
+  };
+  await writeFile(preferencesPath(), JSON.stringify(next, null, 2), "utf8");
+  return next;
+}
+
+function showMainWindow(): void {
+  if (!mainWindow) {
+    createMainWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function quitApplication(): void {
+  isQuitting = true;
+  app.quit();
+}
+
+function createAppTray(): void {
+  if (tray || automationMode) {
+    return;
+  }
+  const image = nativeImage.createFromPath(iconPath()).resize({
+    width: 16,
+    height: 16
+  });
+  tray = new Tray(image);
+  tray.setToolTip("NearView");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "显示 NearView", click: showMainWindow },
+      { type: "separator" },
+      { label: "退出 NearView", click: quitApplication }
+    ])
+  );
+  tray.on("click", showMainWindow);
+}
+
+async function handleWindowClose(): Promise<void> {
+  if (!mainWindow || isQuitting) {
+    return;
+  }
+  const preferences = await readPreferences();
+  if (preferences.closeBehavior === "minimize") {
+    mainWindow.hide();
+    tray?.displayBalloon?.({
+      title: "NearView 仍在运行",
+      content: "房间和屏幕共享会继续运行，点击托盘图标可重新打开。"
+    });
+    return;
+  }
+  if (preferences.closeBehavior === "quit") {
+    quitApplication();
+    return;
+  }
+
+  const result = await dialog.showMessageBox(mainWindow, {
+    type: "question",
+    title: "关闭 NearView",
+    message: "要最小化到系统托盘，还是直接关闭？",
+    detail: "最小化到托盘后，当前房间和屏幕共享会继续运行。",
+    buttons: ["最小化到托盘", "直接关闭", "取消"],
+    defaultId: 0,
+    cancelId: 2,
+    checkboxLabel: "记住我的选择，不再提示",
+    checkboxChecked: false,
+    noLink: true
+  });
+
+  if (result.response === 2) {
+    return;
+  }
+  const closeBehavior = result.response === 0 ? "minimize" : "quit";
+  if (result.checkboxChecked) {
+    await savePreferences({ closeBehavior });
+  }
+  if (closeBehavior === "minimize") {
+    mainWindow.hide();
+    tray?.displayBalloon?.({
+      title: "NearView 仍在运行",
+      content: "房间和屏幕共享会继续运行，点击托盘图标可重新打开。"
+    });
+  } else {
+    quitApplication();
+  }
+}
+
+function overlayBounds(): Electron.Rectangle {
+  const displays = screen.getAllDisplays();
+  const display =
+    displays.find(
+      (item) => String(item.id) === selectedCaptureSource?.displayId
+    ) ?? screen.getPrimaryDisplay();
+  return display.bounds;
+}
+
+function ensureAnnotationOverlay(): BrowserWindow {
+  if (annotationOverlay && !annotationOverlay.isDestroyed()) {
+    return annotationOverlay;
+  }
+  const bounds = overlayBounds();
+  annotationOverlay = new BrowserWindow({
+    ...bounds,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    focusable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: path.join(currentDirectory, "../preload/index.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  annotationOverlay.setIgnoreMouseEvents(true, { forward: true });
+  annotationOverlay.setAlwaysOnTop(true, "screen-saver");
+  annotationOverlay.setContentProtection(true);
+  annotationOverlay.on("closed", () => {
+    annotationOverlay = null;
+  });
+  void annotationOverlay.loadFile(
+    path.join(currentDirectory, "../renderer/overlay.html")
+  );
+  return annotationOverlay;
+}
+
+function showScreenAnnotation(annotation: IncomingAnnotation): void {
+  if (!selectedCaptureSource) {
+    return;
+  }
+  const overlay = ensureAnnotationOverlay();
+  const send = () => {
+    if (!overlay.isDestroyed()) {
+      overlay.webContents.send("screen-annotation:show", annotation);
+      if (!automationMode) {
+        overlay.showInactive();
+      }
+    }
+  };
+  if (overlay.webContents.isLoading()) {
+    overlay.webContents.once("did-finish-load", send);
+  } else {
+    send();
+  }
+}
+
+function clearScreenAnnotations(): void {
+  if (annotationOverlay && !annotationOverlay.isDestroyed()) {
+    annotationOverlay.webContents.send("screen-annotation:clear");
+    annotationOverlay.hide();
+  }
+}
 
 function createMainWindow(): void {
   const capturePath = process.env.NEARVIEW_CAPTURE_PATH;
   const reportPath = process.env.NEARVIEW_SMOKE_REPORT;
   const smokeMode = Boolean(capturePath || reportPath);
   const headless = process.env.NEARVIEW_HEADLESS === "1";
-  const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, "icon.png")
-    : path.join(currentDirectory, "../../resources/icon.png");
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -47,7 +262,7 @@ function createMainWindow(): void {
     minHeight: 700,
     show: false,
     backgroundColor: "#f4f5f2",
-    icon: iconPath,
+    icon: iconPath(),
     title: "NearView",
     autoHideMenuBar: true,
     webPreferences: {
@@ -66,6 +281,20 @@ function createMainWindow(): void {
   });
   mainWindow.on("closed", () => {
     mainWindow = null;
+  });
+
+  mainWindow.on("close", (event) => {
+    if (isQuitting || automationMode) {
+      return;
+    }
+    event.preventDefault();
+    if (closePromptOpen) {
+      return;
+    }
+    closePromptOpen = true;
+    void handleWindowClose().finally(() => {
+      closePromptOpen = false;
+    });
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -232,14 +461,20 @@ function registerIpcHandlers(): void {
       fetchWindowIcons: false
     });
 
-    return sources
+    const captureSources = sources
       .filter((source) => source.name.trim())
-      .map((source) => ({
+      .map((source): CaptureSource => ({
         id: source.id,
         name: source.name,
         kind: source.id.startsWith("screen:") ? "screen" : "window",
-        thumbnail: source.thumbnail.toDataURL()
+        thumbnail: source.thumbnail.toDataURL(),
+        displayId: source.display_id
       }));
+    knownCaptureSources.clear();
+    for (const source of captureSources) {
+      knownCaptureSources.set(source.id, source);
+    }
+    return captureSources;
   });
 
   ipcMain.handle("capture:select-source", (_event, sourceId: unknown) => {
@@ -247,6 +482,7 @@ function registerIpcHandlers(): void {
       throw new Error("无效的捕获目标");
     }
     selectedCaptureSourceId = sourceId;
+    selectedCaptureSource = knownCaptureSources.get(sourceId) ?? null;
   });
 
   ipcMain.handle("clipboard:write", (_event, text: unknown) => {
@@ -256,6 +492,22 @@ function registerIpcHandlers(): void {
     clipboard.writeText(text);
   });
   ipcMain.handle("clipboard:read", () => clipboard.readText());
+  ipcMain.handle("preferences:get", () => readPreferences());
+  ipcMain.handle(
+    "preferences:set",
+    (_event, preferences: Partial<AppPreferences>) =>
+      savePreferences(preferences && typeof preferences === "object" ? preferences : {})
+  );
+  ipcMain.handle("screen-annotation:show", (_event, annotation: IncomingAnnotation) => {
+    if (
+      annotation &&
+      typeof annotation.x1 === "number" &&
+      typeof annotation.y1 === "number"
+    ) {
+      showScreenAnnotation(annotation);
+    }
+  });
+  ipcMain.handle("screen-annotation:clear", () => clearScreenAnnotations());
   ipcMain.handle("app:version", () => app.getVersion());
 }
 
@@ -295,11 +547,10 @@ app.whenReady().then(async () => {
   });
 
   createMainWindow();
+  createAppTray();
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
-    }
+    showMainWindow();
   });
 });
 
@@ -310,10 +561,17 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  isQuitting = true;
+  if (annotationOverlay && !annotationOverlay.isDestroyed()) {
+    annotationOverlay.destroy();
+    annotationOverlay = null;
+  }
   if (signalingServer) {
     void signalingServer.close();
     signalingServer = null;
   }
+  tray?.destroy();
+  tray = null;
 });
 
 process.on("uncaughtException", (error) => {

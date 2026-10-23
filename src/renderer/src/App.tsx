@@ -8,10 +8,12 @@ import {
 } from "react";
 import type {
   AnnotationPayload,
+  AppPreferences,
   ChatMessage,
   NetworkMode,
   NetworkInterfaceInfo,
-  RoomProbeResult
+  RoomProbeResult,
+  UserProfile
 } from "../../shared/types";
 import { CapturePicker } from "./components/CapturePicker";
 import { Icon } from "./components/Icon";
@@ -31,19 +33,61 @@ type DialogState =
 type AnnotationTool = "off" | "pulse" | "arrow";
 
 const USER_NAME_KEY = "nearview.displayName";
+const PROFILE_KEY = "nearview.profile";
+const UI_SETTINGS_KEY = "nearview.uiSettings";
 const ADAPTER_KEY = "nearview.interface";
 const ROOM_NAMES = ["薄荷", "松果", "山雀", "海盐", "青柠", "云杉", "小满", "白露"];
+const AVATAR_COLORS = ["#17634f", "#315ce7", "#b34bd3", "#d27b14", "#ff634d", "#5b6470"];
 
-function defaultDisplayName(): string {
-  const stored = localStorage.getItem(USER_NAME_KEY);
-  if (stored) {
-    return stored;
+interface UiSettings {
+  defaultQuality: QualityMode;
+  screenOverlayDefault: boolean;
+}
+
+function loadProfile(): UserProfile {
+  try {
+    const stored = JSON.parse(
+      localStorage.getItem(PROFILE_KEY) ?? "null"
+    ) as Partial<UserProfile> | null;
+    if (stored && typeof stored.name === "string" && stored.name.trim()) {
+      return {
+        name: stored.name.trim().slice(0, 32),
+        bio: typeof stored.bio === "string" ? stored.bio.slice(0, 80) : "",
+        avatarColor:
+          typeof stored.avatarColor === "string"
+            ? stored.avatarColor
+            : "#17634f"
+      };
+    }
+  } catch {
+    // Fall back to the legacy display-name setting.
   }
-  const name = `${ROOM_NAMES[Math.floor(Math.random() * ROOM_NAMES.length)]} ${
-    Math.floor(Math.random() * 90) + 10
-  }`;
-  localStorage.setItem(USER_NAME_KEY, name);
-  return name;
+  const legacyName = localStorage.getItem(USER_NAME_KEY)?.trim();
+  const name =
+    legacyName ||
+    `${ROOM_NAMES[Math.floor(Math.random() * ROOM_NAMES.length)]} ${
+      Math.floor(Math.random() * 90) + 10
+    }`;
+  return { name, bio: "", avatarColor: "#17634f" };
+}
+
+function loadUiSettings(): UiSettings {
+  try {
+    const stored = JSON.parse(
+      localStorage.getItem(UI_SETTINGS_KEY) ?? "null"
+    ) as Partial<UiSettings> | null;
+    return {
+      defaultQuality:
+        stored?.defaultQuality === "sharp" ||
+        stored?.defaultQuality === "smooth" ||
+        stored?.defaultQuality === "balanced"
+          ? stored.defaultQuality
+          : "balanced",
+      screenOverlayDefault: stored?.screenOverlayDefault ?? true
+    };
+  } catch {
+    return { defaultQuality: "balanced", screenOverlayDefault: true };
+  }
 }
 
 function initials(name: string): string {
@@ -69,9 +113,24 @@ function networkModeLabel(mode: NetworkMode): string {
   return mode === "virtual" ? "虚拟局域网" : "本地局域网";
 }
 
-function RoomAvatar({ name, sharing }: { name: string; sharing: boolean }) {
+function RoomAvatar({
+  name,
+  sharing,
+  avatarColor
+}: {
+  name: string;
+  sharing: boolean;
+  avatarColor?: string;
+}) {
   return (
-    <span className={`member-avatar ${sharing ? "is-sharing" : ""}`}>
+    <span
+      className={`member-avatar ${sharing ? "is-sharing" : ""}`}
+      style={
+        avatarColor
+          ? { backgroundColor: avatarColor, borderColor: avatarColor }
+          : undefined
+      }
+    >
       {initials(name)}
       {sharing ? <i /> : null}
     </span>
@@ -115,25 +174,25 @@ function SignalStrength({
 }
 
 interface HomeProps {
-  displayName: string;
-  setDisplayName: (name: string) => void;
+  profile: UserProfile;
   interfaces: NetworkInterfaceInfo[];
   selectedInterface: string;
   setSelectedInterface: (address: string) => void;
   onCreate: () => void;
   onManualJoin: () => void;
+  onOpenSettings: () => void;
   error: string | null;
   clearError: () => void;
 }
 
 function Home({
-  displayName,
-  setDisplayName,
+  profile,
   interfaces,
   selectedInterface,
   setSelectedInterface,
   onCreate,
   onManualJoin,
+  onOpenSettings,
   error,
   clearError
 }: HomeProps) {
@@ -152,7 +211,7 @@ function Home({
           </span>
           <span>
             <strong>NearView</strong>
-            <small>近屏</small>
+            <small>P2P SCREEN SHARING</small>
           </span>
         </div>
         <div className="topbar-meta">
@@ -164,18 +223,23 @@ function Home({
             <Icon name="signal" size={13} />
             P2P 直连
           </span>
-          <div className="profile-field">
-            <span className="profile-avatar">{initials(displayName)}</span>
-            <label>
-              <small>房间内显示为</small>
-              <input
-                value={displayName}
-                maxLength={32}
-                onChange={(event) => setDisplayName(event.target.value)}
-                aria-label="你的昵称"
-              />
-            </label>
-          </div>
+          <button
+            type="button"
+            className="profile-field profile-button"
+            onClick={onOpenSettings}
+          >
+            <span
+              className="profile-avatar"
+              style={{ backgroundColor: profile.avatarColor, color: "#fff" }}
+            >
+              {initials(profile.name)}
+            </span>
+            <span className="profile-copy">
+              <small>{profile.bio || "个人资料与设置"}</small>
+              <strong>{profile.name}</strong>
+            </span>
+            <Icon name="more" size={16} />
+          </button>
         </div>
       </header>
 
@@ -306,6 +370,213 @@ function Home({
           <span>无房间广播 · 无自动发现</span>
         </footer>
       </main>
+    </div>
+  );
+}
+
+interface SettingsDialogProps {
+  profile: UserProfile;
+  uiSettings: UiSettings;
+  preferences: AppPreferences;
+  onClose: () => void;
+  onSave: (
+    profile: UserProfile,
+    uiSettings: UiSettings,
+    preferences: AppPreferences
+  ) => Promise<void>;
+}
+
+function SettingsDialog({
+  profile,
+  uiSettings,
+  preferences,
+  onClose,
+  onSave
+}: SettingsDialogProps) {
+  const [draftProfile, setDraftProfile] = useState(profile);
+  const [draftUi, setDraftUi] = useState(uiSettings);
+  const [draftPreferences, setDraftPreferences] = useState(preferences);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!draftProfile.name.trim()) {
+      setError("请输入昵称");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave(
+        {
+          ...draftProfile,
+          name: draftProfile.name.trim().slice(0, 32),
+          bio: draftProfile.bio.trim().slice(0, 80)
+        },
+        draftUi,
+        draftPreferences
+      );
+      onClose();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "保存失败");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <form
+        className="modal settings-modal"
+        onSubmit={submit}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="modal-head">
+          <div>
+            <span className="eyebrow">本地资料与偏好</span>
+            <h2>个人资料与设置</h2>
+            <p>资料保存在当前设备，不经过 NearView 服务器。</p>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose}>
+            <Icon name="close" />
+          </button>
+        </div>
+
+        <div className="settings-preview">
+          <span
+            className="profile-avatar large"
+            style={{ backgroundColor: draftProfile.avatarColor }}
+          >
+            {initials(draftProfile.name)}
+          </span>
+          <span>
+            <strong>{draftProfile.name || "你的昵称"}</strong>
+            <small>{draftProfile.bio || "添加一句状态，让房间成员更了解你"}</small>
+          </span>
+        </div>
+
+        <label className="field">
+          <span>昵称</span>
+          <input
+            autoFocus
+            value={draftProfile.name}
+            maxLength={32}
+            onChange={(event) =>
+              setDraftProfile((current) => ({
+                ...current,
+                name: event.target.value
+              }))
+            }
+          />
+        </label>
+
+        <label className="field">
+          <span>
+            个人状态 <small>{draftProfile.bio.length}/80</small>
+          </span>
+          <input
+            value={draftProfile.bio}
+            maxLength={80}
+            placeholder="例如：前端开发 · 在家办公"
+            onChange={(event) =>
+              setDraftProfile((current) => ({
+                ...current,
+                bio: event.target.value
+              }))
+            }
+          />
+        </label>
+
+        <div className="field">
+          <span>头像颜色</span>
+          <div className="avatar-color-picker">
+            {AVATAR_COLORS.map((color) => (
+              <button
+                type="button"
+                key={color}
+                className={
+                  draftProfile.avatarColor === color ? "active" : ""
+                }
+                style={{ backgroundColor: color }}
+                aria-label={`选择头像颜色 ${color}`}
+                onClick={() =>
+                  setDraftProfile((current) => ({
+                    ...current,
+                    avatarColor: color
+                  }))
+                }
+              >
+                {draftProfile.avatarColor === color ? (
+                  <Icon name="check" size={14} />
+                ) : null}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="settings-grid">
+          <label className="field compact">
+            <span>默认画质</span>
+            <select
+              value={draftUi.defaultQuality}
+              onChange={(event) =>
+                setDraftUi((current) => ({
+                  ...current,
+                  defaultQuality: event.target.value as QualityMode
+                }))
+              }
+            >
+              <option value="sharp">文字优先</option>
+              <option value="balanced">均衡</option>
+              <option value="smooth">流畅优先</option>
+            </select>
+          </label>
+          <label className="field compact">
+            <span>点击关闭按钮时</span>
+            <select
+              value={draftPreferences.closeBehavior}
+              onChange={(event) =>
+                setDraftPreferences({
+                  closeBehavior: event.target
+                    .value as AppPreferences["closeBehavior"]
+                })
+              }
+            >
+              <option value="ask">每次询问</option>
+              <option value="minimize">最小化到托盘</option>
+              <option value="quit">直接退出</option>
+            </select>
+          </label>
+        </div>
+
+        <label className="settings-toggle">
+          <span>
+            <strong>默认展开屏幕信息浮层</strong>
+            <small>在全屏观看时显示聊天和在线成员</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={draftUi.screenOverlayDefault}
+            onChange={(event) =>
+              setDraftUi((current) => ({
+                ...current,
+                screenOverlayDefault: event.target.checked
+              }))
+            }
+          />
+        </label>
+
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="modal-actions">
+          <button type="button" className="text-button" onClick={onClose}>
+            取消
+          </button>
+          <button type="submit" className="primary-button" disabled={saving}>
+            {saving ? "正在保存…" : "保存设置"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -764,6 +1035,9 @@ interface RoomChromeProps {
     annotation: Omit<AnnotationPayload, "targetPeerId">
   ) => void;
   setError: (message: string | null) => void;
+  profile: UserProfile;
+  onOpenSettings: () => void;
+  screenOverlayDefault: boolean;
 }
 
 function RoomView({
@@ -787,12 +1061,22 @@ function RoomView({
   onSendChat,
   onSendClipboard,
   onAnnotate,
-  setError
+  setError,
+  profile,
+  onOpenSettings,
+  screenOverlayDefault
 }: RoomChromeProps) {
   const [chatDraft, setChatDraft] = useState("");
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const focusVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [screenOverlayOpen, setScreenOverlayOpen] = useState(
+    screenOverlayDefault
+  );
+
+  useEffect(() => {
+    setScreenOverlayOpen(screenOverlayDefault);
+  }, [screenOverlayDefault]);
 
   const focusedPeer = peers.find((peer) => peer.id === focusedPeerId) ?? null;
   const sharingPeers = peers.filter((peer) => peer.stream && peer.sharing);
@@ -901,7 +1185,7 @@ function RoomView({
             title="所有观看端使用统一的目标播放延迟；慢连接会自动降码率或丢帧追赶"
           >
             <Icon name="signal" size={13} />
-            同步约 {syncLatencyTargetMs}ms
+            自适应同步 ~{syncLatencyTargetMs}ms
           </span>
           <button
             className="invite-button"
@@ -911,6 +1195,17 @@ function RoomView({
           >
             <Icon name="link" size={15} />
             复制 IP
+          </button>
+          <button
+            className="room-profile-button"
+            type="button"
+            onClick={onOpenSettings}
+            title="个人资料与设置"
+          >
+            <span style={{ backgroundColor: profile.avatarColor }}>
+              {initials(profile.name)}
+            </span>
+            <Icon name="more" size={14} />
           </button>
           <button className="leave-button" type="button" onClick={onLeave}>
             离开
@@ -946,7 +1241,9 @@ function RoomView({
               <span className="annotation-label-text">画面标注</span>
               <button
                 type="button"
-                className={`tool-button ${annotationTool === "pulse" ? "active" : ""}`}
+                className={`tool-button annotation-pulse-toggle ${
+                  annotationTool === "pulse" ? "active" : ""
+                }`}
                 onClick={() =>
                   setAnnotationTool(annotationTool === "pulse" ? "off" : "pulse")
                 }
@@ -957,7 +1254,9 @@ function RoomView({
               </button>
               <button
                 type="button"
-                className={`tool-button ${annotationTool === "arrow" ? "active" : ""}`}
+                className={`tool-button annotation-arrow-toggle ${
+                  annotationTool === "arrow" ? "active" : ""
+                }`}
                 onClick={() =>
                   setAnnotationTool(annotationTool === "arrow" ? "off" : "arrow")
                 }
@@ -965,6 +1264,17 @@ function RoomView({
               >
                 <Icon name="arrow" size={16} />
                 箭头
+              </button>
+              <span className="toolbar-divider" />
+              <button
+                type="button"
+                className={`tool-button screen-overlay-toggle ${
+                  screenOverlayOpen ? "active" : ""
+                }`}
+                onClick={() => setScreenOverlayOpen((current) => !current)}
+              >
+                <Icon name="users" size={16} />
+                屏幕覆盖
               </button>
             </div>
             {localStream ? (
@@ -990,6 +1300,94 @@ function RoomView({
               </button>
             )}
           </div>
+
+          {screenOverlayOpen ? (
+            <aside className="screen-overlay-panel">
+              <div className="overlay-panel-head">
+                <span>
+                  <Icon name="users" size={15} />
+                  在线成员
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setScreenOverlayOpen(false)}
+                >
+                  <Icon name="close" size={14} />
+                </button>
+              </div>
+              <div className="overlay-members">
+                <div>
+                  <RoomAvatar
+                    name={selfName}
+                    sharing={Boolean(localStream)}
+                    avatarColor={profile.avatarColor}
+                  />
+                  <span>
+                    <strong>{selfName}</strong>
+                    <small>你 · {localStream ? "共享中" : "在线"}</small>
+                  </span>
+                  <SignalStrength isSelf />
+                </div>
+                {peers.map((peer) => (
+                  <div key={peer.id}>
+                    <RoomAvatar
+                      name={peer.name}
+                      sharing={peer.sharing}
+                      avatarColor={peer.avatarColor}
+                    />
+                    <span>
+                      <strong>{peer.name}</strong>
+                      <small>{peer.bio || "房间成员"}</small>
+                    </span>
+                    <SignalStrength metrics={peer.metrics} />
+                  </div>
+                ))}
+              </div>
+              <div className="overlay-panel-head chat">
+                <span>
+                  <Icon name="spark" size={15} />
+                  房间消息
+                </span>
+              </div>
+              <div className="overlay-chat">
+                {messages.length === 0 ? (
+                  <p>还没有消息</p>
+                ) : (
+                  messages.slice(-6).map((message) => (
+                    <div key={message.id}>
+                      <strong>
+                        {message.peerId === room.selfId ? "你" : message.peerName}
+                      </strong>
+                      <span>{message.text}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="overlay-composer">
+                <input
+                  value={chatDraft}
+                  placeholder="快速发送消息…"
+                  onChange={(event) => setChatDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      !event.nativeEvent.isComposing
+                    ) {
+                      event.preventDefault();
+                      sendMessage();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={sendMessage}
+                  disabled={!chatDraft.trim()}
+                >
+                  <Icon name="send" size={14} />
+                </button>
+              </div>
+            </aside>
+          ) : null}
 
           {focusedPeer?.stream && focusedPeer.sharing ? (
             <section className="focus-stage">
@@ -1113,6 +1511,7 @@ function RoomView({
                 <RoomAvatar
                   name={room.isHost ? room.hostName : selfName}
                   sharing={Boolean(localStream)}
+                  avatarColor={profile.avatarColor}
                 />
                 <span className="member-copy">
                   <strong>{room.isHost ? room.hostName : selfName}</strong>
@@ -1127,10 +1526,19 @@ function RoomView({
               </div>
               {peers.map((peer) => (
                 <div className="member-row" key={peer.id}>
-                  <RoomAvatar name={peer.name} sharing={peer.sharing} />
+                  <RoomAvatar
+                    name={peer.name}
+                    sharing={peer.sharing}
+                    avatarColor={peer.avatarColor}
+                  />
                   <span className="member-copy">
                     <strong>{peer.name}</strong>
-                    <small>{peer.connectionState === "connected" ? "已连接" : "连接中"}</small>
+                    <small>
+                      {peer.bio ||
+                        (peer.connectionState === "connected"
+                          ? "已连接"
+                          : "连接中")}
+                    </small>
                   </span>
                   <span className={`member-state ${peer.sharing ? "sharing" : ""}`}>
                     <SignalStrength metrics={peer.metrics} />
@@ -1220,7 +1628,12 @@ function RoomView({
 }
 
 export default function App() {
-  const [displayName, setDisplayNameState] = useState(defaultDisplayName);
+  const [profile, setProfile] = useState<UserProfile>(loadProfile);
+  const [uiSettings, setUiSettings] = useState<UiSettings>(loadUiSettings);
+  const [preferences, setPreferences] = useState<AppPreferences>({
+    closeBehavior: "ask"
+  });
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [interfaces, setInterfaces] = useState<NetworkInterfaceInfo[]>([]);
   const [selectedInterface, setSelectedInterfaceState] = useState(
     () => localStorage.getItem(ADAPTER_KEY) ?? ""
@@ -1229,8 +1642,15 @@ export default function App() {
   const [captureOpen, setCaptureOpen] = useState(false);
   const [focusedPeerId, setFocusedPeerId] = useState<string | null>(null);
   const [annotationTool, setAnnotationTool] = useState<AnnotationTool>("off");
-  const roomController = useRoom();
+  const roomController = useRoom(uiSettings.defaultQuality);
   const { room, peers, localStream, quality, paused } = roomController;
+
+  useEffect(() => {
+    window.nearview
+      .getPreferences()
+      .then(setPreferences)
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -1258,11 +1678,6 @@ export default function App() {
     };
   }, []);
 
-  function setDisplayName(name: string) {
-    setDisplayNameState(name);
-    localStorage.setItem(USER_NAME_KEY, name);
-  }
-
   function setSelectedInterface(address: string) {
     setSelectedInterfaceState(address);
     localStorage.setItem(ADAPTER_KEY, address);
@@ -1278,7 +1693,7 @@ export default function App() {
     await roomController.createRoom({
       roomName: request.roomName,
       password: request.password || undefined,
-      displayName,
+      profile,
       interfaceAddress: request.interfaceAddress,
       networkMode: request.networkMode
     });
@@ -1301,7 +1716,7 @@ export default function App() {
     await roomController.joinManualRoom(
       endpoint,
       password || undefined,
-      displayName,
+      profile,
       probe
     );
   }
@@ -1332,24 +1747,43 @@ export default function App() {
     }
   }
 
+  async function saveSettings(
+    nextProfile: UserProfile,
+    nextUiSettings: UiSettings,
+    nextPreferences: AppPreferences
+  ) {
+    const savedPreferences = await window.nearview.setPreferences(
+      nextPreferences
+    );
+    setProfile(nextProfile);
+    setUiSettings(nextUiSettings);
+    setPreferences(savedPreferences);
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(nextProfile));
+    localStorage.setItem(USER_NAME_KEY, nextProfile.name);
+    localStorage.setItem(UI_SETTINGS_KEY, JSON.stringify(nextUiSettings));
+    if (room && nextUiSettings.defaultQuality !== quality) {
+      await roomController.applyQuality(nextUiSettings.defaultQuality);
+    }
+  }
+
   if (!room) {
     return (
       <>
         <Home
-          displayName={displayName}
-          setDisplayName={setDisplayName}
+          profile={profile}
           interfaces={interfaces}
           selectedInterface={selectedInterface}
           setSelectedInterface={setSelectedInterface}
           onCreate={() => setDialog({ type: "create" })}
           onManualJoin={() => setDialog({ type: "manual" })}
+          onOpenSettings={() => setSettingsOpen(true)}
           error={roomController.error}
           clearError={() => roomController.setError(null)}
         />
         {dialog ? (
           <ActionDialog
             state={dialog}
-            displayName={displayName}
+            displayName={profile.name}
             interfaces={interfaces}
             selectedInterface={selectedInterface}
             onClose={() => setDialog(null)}
@@ -1357,6 +1791,15 @@ export default function App() {
             onRefreshInterfaces={refreshInterfaces}
             onProbe={roomController.probeRoom}
             onJoinManual={joinManual}
+          />
+        ) : null}
+        {settingsOpen ? (
+          <SettingsDialog
+            profile={profile}
+            uiSettings={uiSettings}
+            preferences={preferences}
+            onClose={() => setSettingsOpen(false)}
+            onSave={saveSettings}
           />
         ) : null}
       </>
@@ -1395,6 +1838,9 @@ export default function App() {
           roomController.sendAnnotation({ targetPeerId, ...annotation })
         }
         setError={roomController.setError}
+        profile={profile}
+        onOpenSettings={() => setSettingsOpen(true)}
+        screenOverlayDefault={uiSettings.screenOverlayDefault}
       />
       {captureOpen ? (
         <CapturePicker
@@ -1423,6 +1869,15 @@ export default function App() {
             <Icon name="close" size={16} />
           </button>
         </div>
+      ) : null}
+      {settingsOpen ? (
+        <SettingsDialog
+          profile={profile}
+          uiSettings={uiSettings}
+          preferences={preferences}
+          onClose={() => setSettingsOpen(false)}
+          onSave={saveSettings}
+        />
       ) : null}
     </>
   );

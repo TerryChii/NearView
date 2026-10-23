@@ -119,6 +119,31 @@ async function connectCdp(port) {
   throw new Error(`Electron DevTools did not start on port ${port}`);
 }
 
+async function connectCdpByTitle(port, title) {
+  const deadline = Date.now() + 8_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+      const targets = await response.json();
+      const target = targets.find(
+        (item) => item.type === "page" && item.title.includes(title)
+      );
+      if (target?.webSocketDebuggerUrl) {
+        const socket = new WebSocket(target.webSocketDebuggerUrl);
+        await new Promise((resolve, reject) => {
+          socket.once("open", resolve);
+          socket.once("error", reject);
+        });
+        return { client: new CdpClient(socket), socket };
+      }
+    } catch {
+      // The overlay target may still be loading.
+    }
+    await delay(200);
+  }
+  throw new Error(`CDP target not found: ${title}`);
+}
+
 async function waitFor(
   client,
   expression,
@@ -193,8 +218,32 @@ try {
     waitFor(bobPage, "Boolean(document.querySelector('.home-page'))", "Bob home")
   ]);
 
-  await alicePage.evaluate(setInput(".profile-field input", "Alice"));
-  await bobPage.evaluate(setInput(".profile-field input", "Bob"));
+  for (const [client, name] of [
+    [alicePage, "Alice"],
+    [bobPage, "Bob"]
+  ]) {
+    await client.evaluate(click(".profile-button"));
+    await waitFor(
+      client,
+      "Boolean(document.querySelector('.settings-modal'))",
+      `${name} settings`
+    );
+    await client.evaluate(
+      setInput(".settings-modal .field input", name)
+    );
+    await client.evaluate(click(".settings-modal .modal-actions .primary-button"));
+    await waitFor(
+      client,
+      "!document.querySelector('.settings-modal')",
+      `${name} settings saved`
+    );
+  }
+  await bobPage.send("Page.reload");
+  await waitFor(
+    bobPage,
+    "document.querySelector('.profile-button .profile-copy strong')?.textContent === 'Bob'",
+    "Profile persisted locally"
+  );
 
   await alicePage.evaluate(click(".hero-actions .primary-button"));
   await waitFor(
@@ -292,6 +341,11 @@ try {
     "Bob sees Alice"
   );
   await waitFor(
+    bobPage,
+    "Boolean(document.querySelector('.screen-overlay-panel'))",
+    "Screen chat and member overlay"
+  );
+  await waitFor(
     alicePage,
     "Boolean(document.querySelector('.share-notice'))",
     "Sharer receives viewer-joined notice"
@@ -329,6 +383,36 @@ try {
     })()`,
     "Peer PING metric"
   );
+
+  await bobPage.evaluate(click(".annotation-pulse-toggle"));
+  const annotationPoint = await bobPage.evaluate(`(() => {
+    const target = document.querySelector(".stream-tile.has-stream .annotation-hit");
+    if (!target) throw new Error("Annotation target not found");
+    const rect = target.getBoundingClientRect();
+    return { x: rect.left + rect.width * 0.46, y: rect.top + rect.height * 0.38 };
+  })()`);
+  await bobPage.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: annotationPoint.x,
+    y: annotationPoint.y,
+    button: "left",
+    clickCount: 1
+  });
+  await bobPage.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: annotationPoint.x,
+    y: annotationPoint.y,
+    button: "left",
+    clickCount: 1
+  });
+  const { client: overlayPage, socket: overlaySocket } =
+    await connectCdpByTitle(9322, "NearView Annotation");
+  await waitFor(
+    overlayPage,
+    "document.querySelectorAll('#marks > g').length > 0",
+    "Screen annotation overlay"
+  );
+  overlaySocket.close();
 
   await bobPage.evaluate(`(() => {
     const input = document.querySelector(".chat-composer textarea");
@@ -414,6 +498,9 @@ try {
         joinAddress,
         members: 2,
         networkModes: true,
+        profileSettings: true,
+        screenOverlay: true,
+        nativeAnnotationOverlay: true,
         sharingDiscovery: true,
         sharerNotice: true,
         pingMetric: true,

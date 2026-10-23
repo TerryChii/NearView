@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-NearView 0.3.x receives security fixes on a best-effort basis.
+NearView 0.4.x receives security fixes on a best-effort basis.
 
 ## Threat model
 

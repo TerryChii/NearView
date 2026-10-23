@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
+  AppPreferences,
   CreateRoomRequest,
+  IncomingAnnotation,
   NearViewApi
 } from "../shared/types";
 
@@ -14,6 +16,25 @@ const api: NearViewApi = {
     ipcRenderer.invoke("capture:select-source", sourceId),
   writeClipboard: (text) => ipcRenderer.invoke("clipboard:write", text),
   readClipboard: () => ipcRenderer.invoke("clipboard:read"),
+  getPreferences: () => ipcRenderer.invoke("preferences:get"),
+  setPreferences: (preferences: Partial<AppPreferences>) =>
+    ipcRenderer.invoke("preferences:set", preferences),
+  onScreenAnnotation: (callback) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      annotation: IncomingAnnotation
+    ) => callback(annotation);
+    ipcRenderer.on("screen-annotation:show", handler);
+    return () => ipcRenderer.removeListener("screen-annotation:show", handler);
+  },
+  onScreenAnnotationsClear: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("screen-annotation:clear", handler);
+    return () => ipcRenderer.removeListener("screen-annotation:clear", handler);
+  },
+  showScreenAnnotation: (annotation) =>
+    ipcRenderer.invoke("screen-annotation:show", annotation),
+  clearScreenAnnotations: () => ipcRenderer.invoke("screen-annotation:clear"),
   getVersion: () => ipcRenderer.invoke("app:version")
 };
 

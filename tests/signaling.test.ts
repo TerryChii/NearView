@@ -138,6 +138,15 @@ describe("SignalingServer", () => {
       room: { name: "Pair room" }
     });
 
+    const syncPolicy = nextMessage(
+      host,
+      (message) => message.type === "sync-policy"
+    );
+    guest.send(JSON.stringify({ type: "sync-report", maxRttMs: 20 }));
+    await expect(syncPolicy).resolves.toMatchObject({
+      targetLatencyMs: 55
+    });
+
     const sharingState = nextMessage(
       host,
       (message) =>
