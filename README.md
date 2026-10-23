@@ -326,27 +326,6 @@ docs/screenshots/        README 安全演示截图
 - 是否验证直连失败和端口占用场景；
 - 是否影响隐私边界或房间权限。
 
-## 上传到 GitHub
-
-仓库中已经包含 CI 和 Release 工作流。首次上传时：
-
-1. 在 GitHub 创建空仓库，不要勾选自动生成 README。
-2. 将 README 中的 `<your-repository-url>` 替换成自己的仓库地址。
-3. 在本目录执行：
-
-```bash
-git remote add origin https://github.com/<用户名>/<仓库名>.git
-git push -u origin main
-```
-
-4. 发布版本时推送标签：
-
-```bash
-git tag v0.4.1
-git push origin v0.4.1
-```
-
-`.github/workflows/release.yml` 会在 GitHub Actions 中构建 Windows 免安装目录并压缩为便携 ZIP，然后创建或更新 GitHub Release。工作流不再构建 NSIS 安装包，避免 Runner 额外下载 NSIS 工具导致发布失败；需要安装包时可在本机运行 `pnpm dist`。
 
 ## License
 
