@@ -346,7 +346,7 @@ git tag v0.4.1
 git push origin v0.4.1
 ```
 
-`.github/workflows/release.yml` 会在 GitHub Actions 中构建 Windows 安装包与便携 ZIP，并创建 GitHub Release。Actions 网络正常时会自动下载 NSIS；若发布任务因外部下载失败，可在本机网络稳定时运行 `pnpm dist` 后手动上传 `release/` 中的产物。
+`.github/workflows/release.yml` 会在 GitHub Actions 中构建 Windows 免安装目录并压缩为便携 ZIP，然后创建或更新 GitHub Release。工作流不再构建 NSIS 安装包，避免 Runner 额外下载 NSIS 工具导致发布失败；需要安装包时可在本机运行 `pnpm dist`。
 
 ## License
 

@@ -21,8 +21,11 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Ensure Electron runtime
+        run: node node_modules/electron/install.js
       - run: pnpm test
-      - run: pnpm dist
+      - name: Build portable Windows app
+        run: pnpm package
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - name: Package portable archive
@@ -35,6 +38,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            release/*.exe
             release/*.zip
           generate_release_notes: true

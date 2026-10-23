@@ -16,7 +16,7 @@
     "docs:screenshot": "pnpm build && node scripts/capture-docs.mjs",
     "build": "pnpm typecheck && electron-vite build",
     "package": "pnpm build && electron-builder --dir",
-    "dist": "pnpm build && electron-builder"
+    "dist": "pnpm build && electron-builder --publish never"
   },
   "dependencies": {
     "react": "^19.3.1",
