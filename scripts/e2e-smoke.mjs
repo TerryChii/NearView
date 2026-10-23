@@ -412,6 +412,23 @@ try {
     "document.querySelectorAll('#marks > g').length > 0",
     "Screen annotation overlay"
   );
+  const overlayMark = await overlayPage.evaluate(`(() => {
+    const circle = document.querySelector("#marks circle");
+    return {
+      x: Number(circle?.getAttribute("cx")),
+      y: Number(circle?.getAttribute("cy")),
+      label: document.querySelector("#labels .annotation-label-chip")?.textContent || ""
+    };
+  })()`);
+  if (
+    Math.abs(overlayMark.x - 46) > 1.5 ||
+    Math.abs(overlayMark.y - 38) > 1.5 ||
+    overlayMark.label !== "Bob"
+  ) {
+    throw new Error(
+      `Annotation mapping mismatch: ${JSON.stringify(overlayMark)}`
+    );
+  }
   overlaySocket.close();
 
   await bobPage.evaluate(`(() => {
@@ -501,6 +518,7 @@ try {
         profileSettings: true,
         screenOverlay: true,
         nativeAnnotationOverlay: true,
+        annotationMapping: overlayMark,
         sharingDiscovery: true,
         sharerNotice: true,
         pingMetric: true,

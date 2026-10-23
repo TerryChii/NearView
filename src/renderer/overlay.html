@@ -26,12 +26,28 @@
         height: 100%;
         overflow: visible;
       }
-      text {
-        paint-order: stroke;
-        stroke: rgba(4, 8, 6, 0.8);
-        stroke-width: 0.65px;
-        font-size: 2.7px;
+      #labels {
+        position: fixed;
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+      }
+      .annotation-label-chip {
+        position: absolute;
+        display: inline-flex;
+        max-width: 180px;
+        padding: 4px 7px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 6px;
+        background: rgba(10, 17, 14, 0.82);
+        box-shadow: 0 3px 12px rgba(0, 0, 0, 0.22);
+        font-size: 10px;
         font-weight: 700;
+        line-height: 1;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        animation: label-fade 2.8s ease forwards;
       }
       .pulse {
         transform-box: fill-box;
@@ -41,6 +57,10 @@
       @keyframes pulse {
         0% { opacity: 1; r: 1; stroke-width: 2; }
         100% { opacity: 0.12; r: 6; stroke-width: 1; }
+      }
+      @keyframes label-fade {
+        0%, 70% { opacity: 1; }
+        100% { opacity: 0; }
       }
     </style>
   </head>
@@ -53,6 +73,7 @@
       </defs>
       <g id="marks"></g>
     </svg>
+    <div id="labels"></div>
     <script type="module" src="/src/overlay.ts"></script>
   </body>
 </html>

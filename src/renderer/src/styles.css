@@ -2145,6 +2145,42 @@ textarea:focus-visible {
   pointer-events: none;
 }
 
+.annotation-label-layer {
+  position: absolute;
+  z-index: 4;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.annotation-label-chip {
+  position: absolute;
+  display: inline-flex;
+  max-width: 150px;
+  align-items: center;
+  padding: 4px 7px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 6px;
+  background: rgba(10, 17, 14, 0.8);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.2);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: annotation-label-fade 2.8s ease forwards;
+}
+
+@keyframes annotation-label-fade {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 .annotation-hit {
   position: absolute;
   z-index: 4;

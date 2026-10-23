@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.4.0-17634f" />
+  <img alt="Version" src="https://img.shields.io/badge/version-0.4.1-17634f" />
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20first-315ce7" />
   <img alt="WebRTC" src="https://img.shields.io/badge/media-WebRTC-27a57a" />
   <img alt="License" src="https://img.shields.io/badge/license-MIT-ff634d" />
@@ -66,6 +66,7 @@
 - 带观看者昵称的点击光圈和拖拽箭头。
 - 标注自动消失，不夺取共享者的鼠标控制权。
 - 标注同步显示在所有观看端，并通过内容保护透明窗口显示在共享者桌面。
+- 标注坐标按真实视频内容区计算，兼容不同窗口比例与黑边；昵称自动避让边缘并短暂淡出。
 - 房间聊天和剪贴板文本投递。
 - 单条消息快速复制。
 - 有人加入正在共享的房间时，仅共享者收到应用内提示。
@@ -341,8 +342,8 @@ git push -u origin main
 4. 发布版本时推送标签：
 
 ```bash
-git tag v0.4.0
-git push origin v0.4.0
+git tag v0.4.1
+git push origin v0.4.1
 ```
 
 `.github/workflows/release.yml` 会在 GitHub Actions 中构建 Windows 安装包与便携 ZIP，并创建 GitHub Release。Actions 网络正常时会自动下载 NSIS；若发布任务因外部下载失败，可在本机网络稳定时运行 `pnpm dist` 后手动上传 `release/` 中的产物。

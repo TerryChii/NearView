@@ -2,6 +2,7 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -19,10 +20,20 @@ interface VideoSurfaceProps {
   muted?: boolean;
   paused?: boolean;
   className?: string;
+  onVideoDimensions?: (dimensions: { width: number; height: number }) => void;
 }
 
 export const VideoSurface = forwardRef<HTMLVideoElement, VideoSurfaceProps>(
-  function VideoSurface({ stream, muted = false, paused = false, className = "" }, ref) {
+  function VideoSurface(
+    {
+      stream,
+      muted = false,
+      paused = false,
+      className = "",
+      onVideoDimensions
+    },
+    ref
+  ) {
     const localRef = useRef<HTMLVideoElement | null>(null);
     useImperativeHandle(ref, () => localRef.current as HTMLVideoElement, []);
 
@@ -32,10 +43,25 @@ export const VideoSurface = forwardRef<HTMLVideoElement, VideoSurfaceProps>(
         return;
       }
       video.srcObject = stream;
+      const reportDimensions = () => {
+        if (video.videoWidth > 0 && video.videoHeight > 0) {
+          onVideoDimensions?.({
+            width: video.videoWidth,
+            height: video.videoHeight
+          });
+        }
+      };
+      video.addEventListener("loadedmetadata", reportDimensions);
+      video.addEventListener("resize", reportDimensions);
+      reportDimensions();
       void video.play().catch(() => {
         // Electron will retry after the next user interaction if autoplay is blocked.
       });
-    }, [stream]);
+      return () => {
+        video.removeEventListener("loadedmetadata", reportDimensions);
+        video.removeEventListener("resize", reportDimensions);
+      };
+    }, [onVideoDimensions, stream]);
 
     return (
       <>
@@ -73,9 +99,28 @@ interface AnnotationOverlayProps {
   annotations: IncomingAnnotation[];
   tool: "off" | "pulse" | "arrow";
   onAnnotate?: (annotation: Omit<AnnotationPayload, "targetPeerId">) => void;
+  frame: { left: number; top: number; width: number; height: number };
 }
 
-function AnnotationOverlay({ annotations, tool, onAnnotate }: AnnotationOverlayProps) {
+function labelPosition(x: number, y: number) {
+  const left = x > 0.72 ? `calc(${x * 100}% - 12px)` : `calc(${x * 100}% + 12px)`;
+  const top = y < 0.2 ? `calc(${y * 100}% + 15px)` : `calc(${y * 100}% - 15px)`;
+  return {
+    left,
+    top,
+    transform:
+      x > 0.72
+        ? "translate(-100%, -50%)"
+        : "translate(0, -50%)"
+  };
+}
+
+function AnnotationOverlay({
+  annotations,
+  tool,
+  onAnnotate,
+  frame
+}: AnnotationOverlayProps) {
   const [drag, setDrag] = useState<{
     x1: number;
     y1: number;
@@ -95,6 +140,7 @@ function AnnotationOverlay({ annotations, tool, onAnnotate }: AnnotationOverlayP
     <>
       <svg
         className="annotation-layer"
+        style={frame}
         viewBox="0 0 100 100"
         preserveAspectRatio="none"
       >
@@ -124,14 +170,6 @@ function AnnotationOverlay({ annotations, tool, onAnnotate }: AnnotationOverlayP
                   fill={color}
                   color={color}
                 />
-                <text
-                  className="annotation-label"
-                  x={annotation.x1 * 100 + 2.8}
-                  y={annotation.y1 * 100 - 2.2}
-                  fill={color}
-                >
-                  {annotation.fromPeerName}
-                </text>
               </g>
             );
           }
@@ -153,14 +191,6 @@ function AnnotationOverlay({ annotations, tool, onAnnotate }: AnnotationOverlayP
                 r="1"
                 fill={color}
               />
-              <text
-                className="annotation-label"
-                x={annotation.x2 * 100 + 1.5}
-                y={annotation.y2 * 100 - 1.5}
-                fill={color}
-              >
-                {annotation.fromPeerName}
-              </text>
             </g>
           );
         })}
@@ -177,9 +207,30 @@ function AnnotationOverlay({ annotations, tool, onAnnotate }: AnnotationOverlayP
           />
         ) : null}
       </svg>
+      <div className="annotation-label-layer" style={frame}>
+        {annotations.map((annotation) => {
+          const point =
+            annotation.tool === "pulse"
+              ? { x: annotation.x1, y: annotation.y1 }
+              : { x: annotation.x2, y: annotation.y2 };
+          return (
+            <span
+              key={`label-${annotation.id}`}
+              className="annotation-label-chip"
+              style={{
+                ...labelPosition(point.x, point.y),
+                color: annotationColor(annotation.fromPeerId)
+              }}
+            >
+              {annotation.fromPeerName}
+            </span>
+          );
+        })}
+      </div>
       {tool !== "off" && onAnnotate ? (
         <div
           className={`annotation-hit annotation-hit-${tool}`}
+          style={frame}
           onPointerDown={(event) => {
             event.currentTarget.setPointerCapture(event.pointerId);
             const start = point(event);
@@ -240,8 +291,52 @@ export function AnnotatedVideo({
   videoRef,
   style
 }: AnnotatedVideoProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const [videoSize, setVideoSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+    const update = () =>
+      setContainerSize({
+        width: container.clientWidth,
+        height: container.clientHeight
+      });
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  const contentFrame = useMemo(() => {
+    const width = containerSize.width;
+    const height = containerSize.height;
+    if (!width || !height) {
+      return { left: 0, top: 0, width, height };
+    }
+    if (!videoSize.width || !videoSize.height) {
+      return { left: 0, top: 0, width, height };
+    }
+    const scale = Math.min(
+      width / videoSize.width,
+      height / videoSize.height
+    );
+    const renderedWidth = videoSize.width * scale;
+    const renderedHeight = videoSize.height * scale;
+    return {
+      left: (width - renderedWidth) / 2,
+      top: (height - renderedHeight) / 2,
+      width: renderedWidth,
+      height: renderedHeight
+    };
+  }, [containerSize, videoSize]);
+
   return (
     <div
+      ref={containerRef}
       className={`media-view ${className}`}
       onClick={(event) => {
         if (annotationTool === "off" && event.target === event.currentTarget) {
@@ -255,11 +350,13 @@ export function AnnotatedVideo({
         stream={stream}
         muted={muted}
         paused={paused}
+        onVideoDimensions={setVideoSize}
       />
       <AnnotationOverlay
         annotations={annotations}
         tool={annotationTool}
         onAnnotate={onAnnotate}
+        frame={contentFrame}
       />
       <button
         type="button"
