@@ -627,22 +627,16 @@ function ActionDialog({
   const [probing, setProbing] = useState(false);
   const [probe, setProbe] = useState<RoomProbeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const availableInterfaces = interfaces.filter((item) =>
-    networkMode === "virtual" ? item.virtual : !item.virtual
-  );
+  const availableInterfaces = interfaces
+    .filter((item) => (networkMode === "virtual" ? item.virtual : !item.virtual))
+    .sort((a, b) => a.virtualPriority - b.virtualPriority);
 
   useEffect(() => {
     if (state.type !== "create") {
       return;
     }
-    if (!availableInterfaces.some((item) => item.address === adapterAddress)) {
-      setAdapterAddress(availableInterfaces[0]?.address ?? "");
-    }
-  }, [
-    adapterAddress,
-    availableInterfaces,
-    state.type
-  ]);
+    setAdapterAddress(availableInterfaces[0]?.address ?? "");
+  }, [interfaces, networkMode, state.type]);
 
   useEffect(() => {
     if (state.type !== "manual" || endpoint.trim().length < 5) {
@@ -800,6 +794,7 @@ function ActionDialog({
                 >
                   {availableInterfaces.map((item) => (
                     <option key={item.id} value={item.address}>
+                      {item.provider ? `${item.provider} · ` : ""}
                       {item.name} · {item.address}
                     </option>
                   ))}

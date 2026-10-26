@@ -112,6 +112,7 @@ export class SignalingServer {
   private readonly chatHistory: ChatMessage[] = [];
   private readonly heartbeatTimer: NodeJS.Timeout;
   private readonly authTimer: NodeJS.Timeout;
+  private readonly allowedLocalAddress: string | undefined;
   readonly roomId = randomUUID();
   readonly room: RoomSummary;
 
@@ -132,8 +133,21 @@ export class SignalingServer {
       ? scryptSync(options.password, this.passwordSalt, 32)
       : null;
     this.onMemberCount = options.onMemberCountChanged;
+    this.allowedLocalAddress = options.bindAddress?.replace(/^::ffff:/, "");
 
-    wss.on("connection", (socket) => this.handleConnection(socket));
+    wss.on("connection", (socket, request) => {
+      const localAddress = request.socket.localAddress?.replace(/^::ffff:/, "");
+      if (
+        this.allowedLocalAddress &&
+        localAddress !== this.allowedLocalAddress &&
+        localAddress !== "127.0.0.1" &&
+        localAddress !== "::1"
+      ) {
+        socket.close(1008, "Unexpected local interface");
+        return;
+      }
+      this.handleConnection(socket);
+    });
     this.heartbeatTimer = setInterval(() => this.heartbeat(), 15_000);
     this.authTimer = setInterval(() => {
       for (const socket of this.clients.keys()) {
@@ -147,7 +161,7 @@ export class SignalingServer {
   static async start(options: SignalingOptions): Promise<SignalingServer> {
     const listen = async (port: number): Promise<WebSocketServer> => {
       const server = new WebSocketServer({
-        host: options.bindAddress ?? "0.0.0.0",
+        host: "0.0.0.0",
         port,
         maxPayload: MAX_MESSAGE_BYTES
       });

@@ -15,7 +15,7 @@ Protected:
 - Voice calling is not implemented; system audio exists only as part of an explicitly started screen share.
 - A password-protected room rejects clients that do not know the password.
 - Room passwords are persisted in memory as salted `scrypt` hashes on the host.
-- The room signaling listener binds only to the network interface selected at creation.
+- The signaling listener accepts remote connections only when they arrive through the selected interface, plus the local loopback connection used by the host.
 - IPC exposure from Electron to the renderer is limited to a typed allowlist.
 - Node integration is disabled and context isolation is enabled.
 

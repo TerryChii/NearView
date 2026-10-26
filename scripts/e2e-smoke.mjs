@@ -5,6 +5,7 @@ import path from "node:path";
 import WebSocket from "ws";
 
 const root = process.cwd();
+const requestedNetworkMode = process.env.NEARVIEW_E2E_NETWORK ?? "local";
 const electronPath = path.join(
   root,
   "node_modules",
@@ -264,9 +265,20 @@ try {
     })()`,
     "Virtual-adapter mode state"
   );
-  await alicePage.evaluate(
-    click(".network-mode-picker button:nth-child(1)")
-  );
+  if (requestedNetworkMode === "virtual") {
+    await waitFor(
+      alicePage,
+      `(() => {
+        const select = document.querySelector(".action-modal .field select");
+        return Boolean(select && select.options.length > 0);
+      })()`,
+      "Virtual adapter available"
+    );
+  } else {
+    await alicePage.evaluate(
+      click(".network-mode-picker button:nth-child(1)")
+    );
+  }
   await alicePage.evaluate(
     setInput(".action-modal .field input", "P2P Smoke Room")
   );
@@ -280,8 +292,10 @@ try {
   );
   await waitFor(
     alicePage,
-    "document.querySelector('.room-network-mode')?.textContent.includes('本地局域网')",
-    "Local network mode label"
+    `document.querySelector('.room-network-mode')?.textContent.includes('${
+      requestedNetworkMode === "virtual" ? "虚拟局域网" : "本地局域网"
+    }')`,
+    "Room network mode label"
   );
 
   const endpoint = await alicePage.evaluate(`(() => {
@@ -514,7 +528,7 @@ try {
         endpoint,
         joinAddress,
         members: 2,
-        networkModes: true,
+        networkModes: requestedNetworkMode,
         profileSettings: true,
         screenOverlay: true,
         nativeAnnotationOverlay: true,

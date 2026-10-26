@@ -50,6 +50,7 @@ export interface ActiveRoom {
 
 interface JoinOptions {
   wsUrl: string;
+  displayUrl?: string;
   roomId?: string;
   password?: string;
   displayName: string;
@@ -217,6 +218,23 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
   const roomStateReadyRef = useRef<Promise<void>>(Promise.resolve());
   const resolveRoomStateReadyRef = useRef<(() => void) | null>(null);
   const lastSyncReportAtRef = useRef(0);
+
+  const resolveClientEndpoint = useCallback(async (endpoint: string) => {
+    const normalized = normalizeManualEndpoint(endpoint);
+    const url = new URL(normalized);
+    const interfaces = await window.nearview.getNetworkInterfaces();
+    if (
+      interfaces.some(
+        (item) => item.address.toLowerCase() === url.hostname.toLowerCase()
+      )
+    ) {
+      return {
+        wsUrl: `ws://127.0.0.1:${url.port}`,
+        displayUrl: normalized
+      };
+    }
+    return { wsUrl: normalized, displayUrl: normalized };
+  }, []);
 
   const getPlaceholderMedia = useCallback((): PlaceholderMedia => {
     const existing = placeholderRef.current;
@@ -995,7 +1013,7 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
         selfName: options.displayName,
         selfBio: options.bio ?? "",
         selfAvatarColor: options.avatarColor ?? "#17634f",
-        wsUrl: options.wsUrl,
+        wsUrl: options.displayUrl ?? options.wsUrl,
         status: "joining"
       };
       roomRef.current = initialRoom;
@@ -1036,7 +1054,11 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
           if (pending) {
             window.clearTimeout(pending.timeout);
             pendingJoinRef.current = null;
-            pending.reject(new Error("无法连接房主，请确认地址、端口和防火墙"));
+            pending.reject(
+              new Error(
+                `无法连接房间服务 ${options.wsUrl}。请确认选中的是 Radmin VPN 等可互通的虚拟网卡，并允许 TCP 42800 通过防火墙`
+              )
+            );
           }
         };
         socket.onclose = () => {
@@ -1081,6 +1103,7 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
       try {
         await connect({
           wsUrl: created.wsUrl,
+          displayUrl: created.inviteUrl,
           roomId: created.id,
           password: request.password,
           displayName: request.profile.name,
@@ -1104,8 +1127,8 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
   );
 
   const probeRoom = useCallback(
-    (endpoint: string): Promise<RoomProbeResult> => {
-      const wsUrl = normalizeManualEndpoint(endpoint);
+    async (endpoint: string): Promise<RoomProbeResult> => {
+      const { wsUrl, displayUrl } = await resolveClientEndpoint(endpoint);
       return new Promise((resolve, reject) => {
         const socket = new WebSocket(wsUrl);
         let settled = false;
@@ -1141,7 +1164,7 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
               const result = message.result as RoomProbeResult;
               finish(undefined, {
                 ...result,
-                endpoint: wsUrl.replace(/^wss?:\/\//i, "").replace(/\/$/, "")
+                endpoint: displayUrl.replace(/^wss?:\/\//i, "").replace(/\/$/, "")
               });
             } else if (message.type === "error" && typeof message.message === "string") {
               finish(new Error(message.message));
@@ -1159,7 +1182,7 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
         };
       });
     },
-    []
+    [resolveClientEndpoint]
   );
 
   const joinManualRoom = useCallback(
@@ -1169,9 +1192,10 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
       profile: UserProfile,
       probe?: RoomProbeResult
     ) => {
-      const wsUrl = normalizeManualEndpoint(endpoint);
+      const { wsUrl, displayUrl } = await resolveClientEndpoint(endpoint);
       await connect({
         wsUrl,
+        displayUrl,
         password,
         displayName: profile.name,
         isHost: false,
@@ -1185,7 +1209,7 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
         avatarColor: profile.avatarColor
       });
     },
-    [connect]
+    [connect, resolveClientEndpoint]
   );
 
   const applyQuality = useCallback(

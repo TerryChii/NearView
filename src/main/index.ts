@@ -437,7 +437,8 @@ function registerIpcHandlers(): void {
           name: roomName,
           hostAddress: interfaceAddress,
           signalingPort: port,
-          wsUrl: `ws://${interfaceAddress}:${port}`,
+          wsUrl: `ws://127.0.0.1:${port}`,
+          inviteUrl: `ws://${interfaceAddress}:${port}`,
           interfaceAddress,
           networkMode,
           adapterName

@@ -1,6 +1,6 @@
 {
   "name": "nearview",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "A private IP-addressed screen sharing app for virtual LANs.",
   "main": "./out/main/index.js",
   "author": "NearView contributors",

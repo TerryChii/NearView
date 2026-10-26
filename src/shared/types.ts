@@ -5,6 +5,8 @@ export interface NetworkInterfaceInfo {
   netmask: string;
   virtual: boolean;
   recommended: boolean;
+  virtualPriority: number;
+  provider: string | null;
 }
 
 export type NetworkMode = "local" | "virtual";
@@ -35,6 +37,7 @@ export interface CreatedRoom {
   hostAddress: string;
   signalingPort: number;
   wsUrl: string;
+  inviteUrl: string;
   interfaceAddress: string;
   networkMode: NetworkMode;
   adapterName: string;

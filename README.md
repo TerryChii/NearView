@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.4.1-17634f" />
+  <img alt="Version" src="https://img.shields.io/badge/version-0.4.2-17634f" />
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20first-315ce7" />
   <img alt="WebRTC" src="https://img.shields.io/badge/media-WebRTC-27a57a" />
   <img alt="License" src="https://img.shields.io/badge/license-MIT-ff634d" />
@@ -46,7 +46,8 @@
 - 本地局域网模式：选择 Ethernet、Wi-Fi 等实体网卡。
 - 虚拟局域网模式：识别 Radmin VPN、ZeroTier、Tailscale、WireGuard、TUN/TAP 等虚拟网卡。
 - 默认信令端口 `42800`，端口冲突时自动选择其他可用端口。
-- 信令服务只监听创建时选择的网卡地址。
+- 虚拟局域网模式优先选择 Radmin VPN 等 VPN 网卡，而不是 WSL/Hyper-V 虚拟交换机。
+- 房主通过本机回环连接内置信令服务，外部成员则通过所选虚拟 IP 连接。
 - 输入 IP 后查看房间名称、成员数量、密码状态和正在共享的画面数量。
 
 ### 屏幕共享
@@ -260,6 +261,12 @@ NearView 当前**不提供麦克风语音聊天**。共享中的系统声音只�
 2. 房主选择的网卡地址是否就是双方都能访问的虚拟 IP；
 3. Windows 防火墙是否允许 TCP `42800`，或房间界面显示的其他端口；
 4. 房主是否已经创建房间并且选择“虚拟局域网”模式。
+
+### 虚拟局域网模式创建房间失败怎么办？
+
+- 确认在“虚拟网卡”下拉框中明确选择了 `Radmin VPN`，而不是带有 `vEthernet`、`WSL`、`Hyper-V` 字样的系统虚拟交换机。
+- Radmin VPN 网卡通常属于 Windows 的 Public 网络配置；首次运行时需要允许 NearView 在专用网络和公用网络上接收 TCP 连接。
+- NearView 0.4.2 起会优先选择 Radmin VPN，并使用本机回环地址完成房主内部连接，避免直接回连虚拟 IP 导致失败。
 
 ### 文字聊天是端到端加密吗？
 
