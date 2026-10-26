@@ -1,6 +1,6 @@
 {
   "name": "nearview",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "A private IP-addressed screen sharing app for virtual LANs.",
   "main": "./out/main/index.js",
   "author": "NearView contributors",
@@ -22,6 +22,9 @@
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "ws": "^8.18.3"
+  },
+  "optionalDependencies": {
+    "loopback-capture": "^3.0.2"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AnnotationPayload,
+  CaptureAudioMode,
   ChatMessage,
   IncomingAnnotation,
   NetworkMode,
@@ -26,6 +27,8 @@ export interface RoomViewPeer extends PeerSummary {
 
 export interface PeerConnectionMetrics {
   pingMs: number | null;
+  jitterMs: number | null;
+  packetLossPercent: number | null;
   syncBufferMs: number;
   targetLatencyMs: number;
   signal: "excellent" | "good" | "fair" | "poor" | "unknown";
@@ -79,6 +82,9 @@ interface PeerRuntime {
   pendingPings: Map<string, number>;
   lastNetworkReportAt: number;
   remoteReportedRttMs: number | null;
+  remoteReportedJitterMs: number;
+  remoteReportedLossPercent: number;
+  encoderLimited: boolean;
   syncTargetMs: number;
 }
 
@@ -107,6 +113,15 @@ interface PlaceholderMedia {
   audioTrack: MediaStreamTrack | null;
   audioContext: AudioContext | null;
   refreshTimer: number;
+}
+
+interface ApplicationAudioSession {
+  stream: MediaStream;
+  track: MediaStreamTrack;
+  context: AudioContext;
+  processor: ScriptProcessorNode;
+  destination: MediaStreamAudioDestinationNode;
+  unsubscribe: () => void;
 }
 
 const QUALITY_SETTINGS: Record<
@@ -215,6 +230,7 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
   const pausedRef = useRef(false);
   const pendingJoinRef = useRef<PendingJoin | null>(null);
   const placeholderRef = useRef<PlaceholderMedia | null>(null);
+  const applicationAudioRef = useRef<ApplicationAudioSession | null>(null);
   const roomStateReadyRef = useRef<Promise<void>>(Promise.resolve());
   const resolveRoomStateReadyRef = useRef<(() => void) | null>(null);
   const lastSyncReportAtRef = useRef(0);
@@ -293,6 +309,104 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
     void media.audioContext?.close();
   }, []);
 
+  const stopApplicationAudio = useCallback(() => {
+    const session = applicationAudioRef.current;
+    applicationAudioRef.current = null;
+    if (!session) {
+      void window.nearview.stopApplicationAudio();
+      return;
+    }
+    session.unsubscribe();
+    session.processor.disconnect();
+    session.destination.disconnect();
+    session.track.stop();
+    void session.context.close();
+    void window.nearview.stopApplicationAudio();
+  }, []);
+
+  const startApplicationAudio = useCallback(async () => {
+    const context = new AudioContext({
+      sampleRate: 48_000,
+      latencyHint: "interactive"
+    });
+    const processor = context.createScriptProcessor(2_048, 0, 2);
+    processor.channelCount = 2;
+    processor.channelCountMode = "explicit";
+    const destination = context.createMediaStreamDestination();
+    destination.channelCount = 2;
+    processor.connect(destination);
+
+    let pending = new Float32Array(0);
+    const unsubscribe = window.nearview.onApplicationAudioChunk((chunk) => {
+      if (chunk.byteLength < 2) {
+        return;
+      }
+      const pcm = new Int16Array(
+        chunk.buffer,
+        chunk.byteOffset,
+        Math.floor(chunk.byteLength / 2)
+      );
+      const floats = new Float32Array(pcm.length);
+      for (let index = 0; index < pcm.length; index += 1) {
+        floats[index] = pcm[index] / 32_768;
+      }
+      const merged = new Float32Array(pending.length + floats.length);
+      merged.set(pending);
+      merged.set(floats, pending.length);
+      pending = merged;
+      if (pending.length > 48_000 * 2) {
+        pending = pending.slice(-48_000);
+      }
+    });
+
+    processor.onaudioprocess = (event) => {
+      const left = event.outputBuffer.getChannelData(0);
+      const right = event.outputBuffer.getChannelData(1);
+      const requiredSamples = left.length * 2;
+      if (pending.length >= requiredSamples) {
+        for (let index = 0; index < left.length; index += 1) {
+          left[index] = pending[index * 2];
+          right[index] = pending[index * 2 + 1];
+        }
+        pending = pending.slice(requiredSamples);
+      } else {
+        left.fill(0);
+        right.fill(0);
+        pending = new Float32Array(0);
+      }
+    };
+
+    try {
+      await window.nearview.startApplicationAudio();
+      await context.resume();
+    } catch (reason) {
+      unsubscribe();
+      processor.disconnect();
+      destination.disconnect();
+      await context.close();
+      throw reason;
+    }
+
+    const track = destination.stream.getAudioTracks()[0];
+    if (!track) {
+      unsubscribe();
+      processor.disconnect();
+      destination.disconnect();
+      await context.close();
+      throw new Error("无法创建程序音频轨道");
+    }
+    const session: ApplicationAudioSession = {
+      stream: new MediaStream([track]),
+      track,
+      context,
+      processor,
+      destination,
+      unsubscribe
+    };
+    applicationAudioRef.current = session;
+    return session;
+  }, []);
+
   const publishPeers = useCallback(() => {
     setPeers(
       [...peersRef.current.values()]
@@ -346,7 +460,10 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
       runtime.metrics.syncBufferMs = bufferMs;
       runtime.metrics.targetLatencyMs = runtime.syncTargetMs;
       for (const transceiver of runtime.pc.getTransceivers()) {
-        if (transceiver.receiver.track.kind !== "video") {
+        if (
+          transceiver.receiver.track.kind !== "video" &&
+          transceiver.receiver.track.kind !== "audio"
+        ) {
           continue;
         }
         const receiver = transceiver.receiver as RTCRtpReceiver & {
@@ -371,13 +488,45 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
       runtime.metrics.pingMs ?? 0,
       runtime.remoteReportedRttMs ?? 0
     );
+    const pressureLoss = Math.max(
+      runtime.metrics.packetLossPercent ?? 0,
+      runtime.remoteReportedLossPercent
+    );
+    const pressureJitter = Math.max(
+      runtime.metrics.jitterMs ?? 0,
+      runtime.remoteReportedJitterMs
+    );
     const constrained =
-      pressureRtt > 450
-        ? { maxBitrate: 900_000, scale: 2, frameRate: 20 }
-        : pressureRtt > 250
-          ? { maxBitrate: 2_000_000, scale: 1.5, frameRate: 24 }
-          : { maxBitrate: settings.maxBitrate, scale: 1, frameRate: settings.frameRate };
+      pressureRtt > 450 ||
+      pressureLoss > 10 ||
+      pressureJitter > 150 ||
+      runtime.encoderLimited
+        ? {
+            maxBitrate: 900_000,
+            scale: 2,
+            frameRate: 20,
+            motion: true
+          }
+        : pressureRtt > 250 ||
+            pressureLoss > 3 ||
+            pressureJitter > 80
+          ? {
+              maxBitrate: 2_000_000,
+              scale: 1.5,
+              frameRate: 24,
+              motion: true
+            }
+          : {
+              maxBitrate: settings.maxBitrate,
+              scale: 1,
+              frameRate: settings.frameRate,
+              motion: settings.contentHint === "motion"
+            };
     try {
+      if (runtime.videoSender.track) {
+        runtime.videoSender.track.contentHint =
+          constrained.motion ? "motion" : "detail";
+      }
       const parameters = runtime.videoSender.getParameters();
       if (!parameters.encodings?.length) {
         parameters.encodings = [{}];
@@ -385,7 +534,9 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
       parameters.encodings[0].maxBitrate = constrained.maxBitrate;
       parameters.encodings[0].scaleResolutionDownBy = constrained.scale;
       parameters.encodings[0].maxFramerate = constrained.frameRate;
-      parameters.degradationPreference = "balanced";
+      parameters.degradationPreference = constrained.motion
+        ? "maintain-framerate"
+        : "balanced";
       await runtime.videoSender.setParameters(parameters);
     } catch {
       // Some GPU/codec combinations do not allow bitrate changes at runtime.
@@ -462,10 +613,15 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
           const pingMs = Math.max(1, Math.round(performance.now() - startedAt));
           runtime.metrics = {
             pingMs,
+            jitterMs: runtime.metrics.jitterMs,
+            packetLossPercent: runtime.metrics.packetLossPercent,
             syncBufferMs: runtime.metrics.syncBufferMs,
             targetLatencyMs: runtime.syncTargetMs,
             signal: signalFromPing(pingMs),
-            adaptive: pingMs > 220
+            adaptive:
+              pingMs > 220 ||
+              (runtime.metrics.jitterMs ?? 0) > 80 ||
+              (runtime.metrics.packetLossPercent ?? 0) > 3
           };
           applyReceiverLatency(runtime);
           reportSyncRtt();
@@ -475,7 +631,12 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
           if (performance.now() - runtime.lastNetworkReportAt > 5_000) {
             runtime.lastNetworkReportAt = performance.now();
             channel.send(
-              JSON.stringify({ type: "network-report", rttMs: pingMs })
+              JSON.stringify({
+                type: "network-report",
+                rttMs: pingMs,
+                jitterMs: runtime.metrics.jitterMs ?? 0,
+                packetLossPercent: runtime.metrics.packetLossPercent ?? 0
+              })
             );
           }
           return;
@@ -486,11 +647,22 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
             return;
           }
           runtime.remoteReportedRttMs = Math.min(5_000, Math.max(0, reported));
+          runtime.remoteReportedJitterMs = Math.min(
+            2_000,
+            Math.max(0, Number(message.jitterMs) || 0)
+          );
+          runtime.remoteReportedLossPercent = Math.min(
+            100,
+            Math.max(0, Number(message.packetLossPercent) || 0)
+          );
           runtime.metrics = {
             ...runtime.metrics,
             adaptive:
               (runtime.metrics.pingMs ?? 0) > 220 ||
-              runtime.remoteReportedRttMs > 220
+              runtime.remoteReportedRttMs > 220 ||
+              runtime.remoteReportedJitterMs > 80 ||
+              runtime.remoteReportedLossPercent > 3 ||
+              runtime.encoderLimited
           };
           reportSyncRtt();
           void applySenderQuality(runtime);
@@ -612,6 +784,8 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
         ready: Promise.resolve(),
         metrics: {
           pingMs: null,
+          jitterMs: null,
+          packetLossPercent: null,
           syncBufferMs: syncBufferForTarget(DEFAULT_SYNC_TARGET_MS, null),
           targetLatencyMs: DEFAULT_SYNC_TARGET_MS,
           signal: "unknown",
@@ -620,6 +794,9 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
         pendingPings: new Map(),
         lastNetworkReportAt: 0,
         remoteReportedRttMs: null,
+        remoteReportedJitterMs: 0,
+        remoteReportedLossPercent: 0,
+        encoderLimited: false,
         syncTargetMs: DEFAULT_SYNC_TARGET_MS
       };
       peersRef.current.set(summary.id, runtime);
@@ -957,6 +1134,7 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
     }
     pausedTrackRef.current?.stop();
     pausedTrackRef.current = null;
+    stopApplicationAudio();
     disposePlaceholderMedia();
     for (const track of localStreamRef.current?.getTracks() ?? []) {
       track.stop();
@@ -980,7 +1158,7 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
       window.clearTimeout(timer);
     }
     annotationTimersRef.current.clear();
-  }, [disposePlaceholderMedia, publishPeers]);
+  }, [disposePlaceholderMedia, publishPeers, stopApplicationAudio]);
 
   const leaveRoom = useCallback(async () => {
     await resetSession();
@@ -1241,7 +1419,7 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
   );
 
   const startShare = useCallback(
-    async (sourceId: string, includeAudio: boolean) => {
+    async (sourceId: string, audioMode: CaptureAudioMode) => {
       await window.nearview.selectCaptureSource(sourceId);
       const settings = QUALITY_SETTINGS[qualityRef.current];
       const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -1250,7 +1428,7 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
           height: { ideal: settings.height },
           frameRate: { ideal: settings.frameRate, max: 60 }
         },
-        audio: includeAudio
+        audio: audioMode === "system"
       });
 
       const videoTrack = stream.getVideoTracks()[0];
@@ -1260,15 +1438,29 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
       }
       videoTrack.contentHint = settings.contentHint;
       videoTrack.addEventListener("ended", () => {
-        if (localStreamRef.current === stream) {
+        if (localStreamRef.current?.getVideoTracks()[0] === videoTrack) {
           void stopShare();
         }
       });
 
       const previous = localStreamRef.current;
       previous?.getTracks().forEach((track) => track.stop());
-      localStreamRef.current = stream;
-      setLocalStream(stream);
+      stopApplicationAudio();
+      let activeStream = stream;
+      if (audioMode === "application") {
+        try {
+          const applicationAudio = await startApplicationAudio();
+          activeStream = new MediaStream([
+            ...stream.getVideoTracks(),
+            applicationAudio.track
+          ]);
+        } catch (reason) {
+          stream.getTracks().forEach((track) => track.stop());
+          throw reason;
+        }
+      }
+      localStreamRef.current = activeStream;
+      setLocalStream(activeStream);
       pausedRef.current = false;
       setPaused(false);
       await replaceOutgoingTracks();
@@ -1279,9 +1471,16 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
       );
       sendStatus({ sharing: true, paused: false });
       reportSyncRtt(true);
-    void window.nearview.clearScreenAnnotations();
+      void window.nearview.clearScreenAnnotations();
     },
-    [applySenderQuality, replaceOutgoingTracks, reportSyncRtt, sendStatus]
+    [
+      applySenderQuality,
+      replaceOutgoingTracks,
+      reportSyncRtt,
+      sendStatus,
+      startApplicationAudio,
+      stopApplicationAudio
+    ]
   );
 
   const stopShare = useCallback(async () => {
@@ -1293,6 +1492,7 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
     }
     pausedTrackRef.current?.stop();
     pausedTrackRef.current = null;
+    stopApplicationAudio();
     pausedRef.current = false;
     setPaused(false);
     setLocalStream(null);
@@ -1302,7 +1502,7 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
     void window.nearview.clearScreenAnnotations();
     lastSyncReportAtRef.current = 0;
     setAdaptiveSyncTargetMs(DEFAULT_SYNC_TARGET_MS);
-  }, [replaceOutgoingTracks, sendStatus]);
+  }, [replaceOutgoingTracks, sendStatus, stopApplicationAudio]);
 
   const toggleFreeze = useCallback(async () => {
     const stream = localStreamRef.current;
@@ -1391,6 +1591,9 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
       try {
         const stats = await runtime.pc.getStats();
         let pingMs: number | null = null;
+        let jitterMs: number | null = null;
+        let packetLossPercent: number | null = null;
+        let encoderLimited = false;
         for (const item of stats.values()) {
           if (
             item.type === "candidate-pair" &&
@@ -1400,6 +1603,26 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
           ) {
             const candidatePing = Math.round(item.currentRoundTripTime * 1_000);
             pingMs = pingMs === null ? candidatePing : Math.min(pingMs, candidatePing);
+          }
+          if (item.type === "inbound-rtp" && item.kind === "video") {
+            if (typeof item.jitter === "number") {
+              jitterMs = Math.round(item.jitter * 1_000);
+            }
+            const lost = Number(item.packetsLost) || 0;
+            const received = Number(item.packetsReceived) || 0;
+            if (lost + received > 0) {
+              packetLossPercent = Math.min(
+                100,
+                Math.max(0, (lost / (lost + received)) * 100)
+              );
+            }
+          }
+          if (
+            item.type === "outbound-rtp" &&
+            item.kind === "video" &&
+            item.qualityLimitationReason === "cpu"
+          ) {
+            encoderLimited = true;
           }
         }
         if (
@@ -1411,9 +1634,16 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
         runtime.metrics = {
           ...runtime.metrics,
           pingMs,
+          jitterMs,
+          packetLossPercent,
           signal: signalFromPing(pingMs),
-          adaptive: pingMs > 220
+          adaptive:
+            pingMs > 220 ||
+            (jitterMs ?? 0) > 80 ||
+            (packetLossPercent ?? 0) > 3 ||
+            encoderLimited
         };
+        runtime.encoderLimited = encoderLimited;
         applyReceiverLatency(runtime);
         void applySenderQuality(runtime);
         publishPeers();
@@ -1429,9 +1659,8 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
       for (const runtime of peersRef.current.values()) {
         if (runtime.channel?.readyState === "open") {
           sendDataPing(runtime);
-        } else {
-          void refreshRttFromStats(runtime);
         }
+        void refreshRttFromStats(runtime);
       }
     }, 2_000);
     return () => window.clearInterval(timer);
@@ -1517,6 +1746,7 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
       }
       localStreamRef.current?.getTracks().forEach((track) => track.stop());
       pausedTrackRef.current?.stop();
+      stopApplicationAudio();
       if (shareJoinNoticeTimerRef.current) {
         window.clearTimeout(shareJoinNoticeTimerRef.current);
       }
@@ -1528,7 +1758,7 @@ export function useRoom(initialQuality: QualityMode = "balanced") {
       }
       void window.nearview.clearScreenAnnotations();
     };
-  }, [disposePlaceholderMedia]);
+  }, [disposePlaceholderMedia, stopApplicationAudio]);
 
   return {
     room,

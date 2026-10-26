@@ -80,6 +80,7 @@ export interface ChatMessage {
 }
 
 export type CaptureSourceKind = "screen" | "window";
+export type CaptureAudioMode = "none" | "system" | "application";
 
 export interface CaptureSource {
   id: string;
@@ -111,6 +112,11 @@ export type NearViewApi = {
   leaveRoom: () => Promise<void>;
   getCaptureSources: () => Promise<CaptureSource[]>;
   selectCaptureSource: (sourceId: string) => Promise<void>;
+  startApplicationAudio: () => Promise<{ processId: number }>;
+  stopApplicationAudio: () => Promise<void>;
+  onApplicationAudioChunk: (
+    callback: (chunk: Uint8Array) => void
+  ) => () => void;
   writeClipboard: (text: string) => Promise<void>;
   readClipboard: () => Promise<string>;
   getPreferences: () => Promise<AppPreferences>;

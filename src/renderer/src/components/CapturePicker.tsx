@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CaptureSource } from "../../../shared/types";
+import type {
+  CaptureAudioMode,
+  CaptureSource
+} from "../../../shared/types";
 import { Icon } from "./Icon";
 
 interface CapturePickerProps {
   onClose: () => void;
-  onSelect: (sourceId: string, includeAudio: boolean) => Promise<void>;
+  onSelect: (sourceId: string, audioMode: CaptureAudioMode) => Promise<void>;
 }
 
 export function CapturePicker({ onClose, onSelect }: CapturePickerProps) {
@@ -12,7 +15,7 @@ export function CapturePicker({ onClose, onSelect }: CapturePickerProps) {
   const [tab, setTab] = useState<"screen" | "window">("screen");
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [includeAudio, setIncludeAudio] = useState(false);
+  const [audioMode, setAudioMode] = useState<CaptureAudioMode>("none");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -46,11 +49,17 @@ export function CapturePicker({ onClose, onSelect }: CapturePickerProps) {
     [sources, tab]
   );
 
+  useEffect(() => {
+    if (tab === "screen" && audioMode === "application") {
+      setAudioMode("none");
+    }
+  }, [audioMode, tab]);
+
   async function choose(source: CaptureSource) {
     setBusyId(source.id);
     setError(null);
     try {
-      await onSelect(source.id, includeAudio);
+      await onSelect(source.id, audioMode);
       onClose();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "开始共享失败");
@@ -118,17 +127,46 @@ export function CapturePicker({ onClose, onSelect }: CapturePickerProps) {
         </div>
 
         <div className="capture-footer">
-          <label className="switch-row">
-            <span>
-              <strong>共享系统声音</strong>
-              <small>Windows 下会捕获正在播放的音频</small>
-            </span>
-            <input
-              type="checkbox"
-              checked={includeAudio}
-              onChange={(event) => setIncludeAudio(event.target.checked)}
-            />
-          </label>
+          <div className="audio-capture-options">
+            <label>
+              <input
+                type="radio"
+                name="capture-audio"
+                checked={audioMode === "none"}
+                onChange={() => setAudioMode("none")}
+              />
+              <span>
+                <strong>不共享声音</strong>
+                <small>只传输画面</small>
+              </span>
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="capture-audio"
+                checked={audioMode === "system"}
+                onChange={() => setAudioMode("system")}
+              />
+              <span>
+                <strong>共享系统声音</strong>
+                <small>捕获电脑正在播放的全部声音</small>
+              </span>
+            </label>
+            {tab === "window" ? (
+              <label>
+                <input
+                  type="radio"
+                  name="capture-audio"
+                  checked={audioMode === "application"}
+                  onChange={() => setAudioMode("application")}
+                />
+                <span>
+                  <strong>仅共享所选程序声音</strong>
+                  <small>Windows 10 2004+，包含该程序的子进程声音</small>
+                </span>
+              </label>
+            ) : null}
+          </div>
           {error ? <p className="inline-error">{error}</p> : null}
         </div>
       </section>

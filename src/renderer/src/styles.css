@@ -1474,6 +1474,50 @@ textarea:focus-visible {
   border-top: 1px solid var(--line);
 }
 
+.audio-capture-options {
+  display: grid;
+  gap: 7px;
+}
+
+.audio-capture-options label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease;
+}
+
+.audio-capture-options label:has(input:checked) {
+  border-color: #9fc7b6;
+  background: #f0f8f4;
+}
+
+.audio-capture-options input {
+  margin: 2px 0 0;
+  accent-color: var(--green);
+}
+
+.audio-capture-options label > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.audio-capture-options strong {
+  font-size: 10px;
+}
+
+.audio-capture-options small {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
 .switch-row {
   display: flex;
   align-items: center;

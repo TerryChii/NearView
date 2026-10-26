@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import {
   app,
   BrowserWindow,
@@ -39,6 +41,8 @@ let signalingServer: SignalingServer | null = null;
 let createdRoom: CreatedRoom | null = null;
 let selectedCaptureSourceId: string | null = null;
 let selectedCaptureSource: CaptureSource | null = null;
+let selectedWindowProcessId: number | null = null;
+let applicationAudioCapture: { stop: () => void } | null = null;
 const knownCaptureSources = new Map<string, CaptureSource>();
 let roomCreationInFlight = false;
 let isQuitting = false;
@@ -48,6 +52,7 @@ const DEFAULT_PREFERENCES: AppPreferences = { closeBehavior: "ask" };
 const automationMode =
   process.env.NEARVIEW_HEADLESS === "1" ||
   Boolean(process.env.NEARVIEW_CAPTURE_PATH || process.env.NEARVIEW_SMOKE_REPORT);
+const execFileAsync = promisify(execFile);
 
 function iconPath(): string {
   return app.isPackaged
@@ -247,6 +252,39 @@ function clearScreenAnnotations(): void {
   if (annotationOverlay && !annotationOverlay.isDestroyed()) {
     annotationOverlay.webContents.send("screen-annotation:clear");
     annotationOverlay.hide();
+  }
+}
+
+async function resolveWindowProcessId(title: string): Promise<number | null> {
+  if (process.platform !== "win32" || !title.trim()) {
+    return null;
+  }
+  const script = [
+    "$title=$env:NEARVIEW_WINDOW_TITLE",
+    "$process=Get-Process | Where-Object { $_.MainWindowTitle -eq $title } | Sort-Object Id | Select-Object -First 1",
+    "if($process){[Console]::WriteLine($process.Id)}"
+  ].join("; ");
+  try {
+    const { stdout } = await execFileAsync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      {
+        timeout: 5_000,
+        windowsHide: true,
+        env: { ...process.env, NEARVIEW_WINDOW_TITLE: title }
+      }
+    );
+    const pid = Number(stdout.trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function stopApplicationAudio(): void {
+  if (applicationAudioCapture) {
+    applicationAudioCapture.stop();
+    applicationAudioCapture = null;
   }
 }
 
@@ -478,12 +516,46 @@ function registerIpcHandlers(): void {
     return captureSources;
   });
 
-  ipcMain.handle("capture:select-source", (_event, sourceId: unknown) => {
+  ipcMain.handle("capture:select-source", async (_event, sourceId: unknown) => {
     if (typeof sourceId !== "string" || !sourceId) {
       throw new Error("无效的捕获目标");
     }
+    stopApplicationAudio();
     selectedCaptureSourceId = sourceId;
     selectedCaptureSource = knownCaptureSources.get(sourceId) ?? null;
+    selectedWindowProcessId =
+      selectedCaptureSource?.kind === "window"
+        ? await resolveWindowProcessId(selectedCaptureSource.name)
+        : null;
+  });
+
+  ipcMain.handle("audio:start-application", async () => {
+    if (process.platform !== "win32") {
+      throw new Error("单程序音频捕获当前仅支持 Windows 10 2004 及以上版本");
+    }
+    if (
+      !selectedCaptureSource ||
+      selectedCaptureSource.kind !== "window" ||
+      !selectedWindowProcessId
+    ) {
+      throw new Error(
+        "无法识别所选窗口对应的程序，请选择单个应用窗口后重试"
+      );
+    }
+    stopApplicationAudio();
+    const loopbackCapture = await import("loopback-capture");
+    const capture = new loopbackCapture.default.LoopbackCapture();
+    capture.start(selectedWindowProcessId, true, (chunk) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("audio:application-chunk", chunk);
+      }
+    });
+    applicationAudioCapture = capture;
+    return { processId: selectedWindowProcessId };
+  });
+
+  ipcMain.handle("audio:stop-application", () => {
+    stopApplicationAudio();
   });
 
   ipcMain.handle("clipboard:write", (_event, text: unknown) => {
@@ -563,6 +635,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  stopApplicationAudio();
   if (annotationOverlay && !annotationOverlay.isDestroyed()) {
     annotationOverlay.destroy();
     annotationOverlay = null;

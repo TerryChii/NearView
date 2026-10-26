@@ -14,6 +14,15 @@ const api: NearViewApi = {
   getCaptureSources: () => ipcRenderer.invoke("capture:sources"),
   selectCaptureSource: (sourceId) =>
     ipcRenderer.invoke("capture:select-source", sourceId),
+  startApplicationAudio: () => ipcRenderer.invoke("audio:start-application"),
+  stopApplicationAudio: () => ipcRenderer.invoke("audio:stop-application"),
+  onApplicationAudioChunk: (callback) => {
+    const handler = (_event: Electron.IpcRendererEvent, chunk: Uint8Array) =>
+      callback(new Uint8Array(chunk));
+    ipcRenderer.on("audio:application-chunk", handler);
+    return () =>
+      ipcRenderer.removeListener("audio:application-chunk", handler);
+  },
   writeClipboard: (text) => ipcRenderer.invoke("clipboard:write", text),
   readClipboard: () => ipcRenderer.invoke("clipboard:read"),
   getPreferences: () => ipcRenderer.invoke("preferences:get"),

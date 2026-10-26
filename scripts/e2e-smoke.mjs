@@ -315,6 +315,13 @@ try {
     "document.querySelectorAll('.capture-item').length > 0",
     "Capture sources"
   );
+  await alicePage.evaluate(click(".capture-tabs button:nth-child(2)"));
+  await waitFor(
+    alicePage,
+    "document.querySelector('.audio-capture-options')?.innerText.includes('仅共享所选程序声音')",
+    "Application audio option"
+  );
+  await alicePage.evaluate(click(".capture-tabs button:nth-child(1)"));
   await alicePage.evaluate(click(".capture-item"));
   await waitFor(
     alicePage,
@@ -531,6 +538,7 @@ try {
         networkModes: requestedNetworkMode,
         profileSettings: true,
         screenOverlay: true,
+        applicationAudioOption: true,
         nativeAnnotationOverlay: true,
         annotationMapping: overlayMark,
         sharingDiscovery: true,
